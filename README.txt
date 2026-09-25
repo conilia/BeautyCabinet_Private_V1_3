@@ -1,3 +1,6 @@
+Beauty Cabinet V1.3.1
+Fix: iPhone/iPad auth overlay now respects hidden state.
+
 Beauty Cabinet V1.3 Private Foundation
 =======================================
 

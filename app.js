@@ -132,15 +132,26 @@ async function initializeAuth() {
 }
 async function createVault() {
   setAuthError();
+  const btn = $('#createVaultBtn');
   const p1 = $('#newPassword').value; const p2 = $('#confirmPassword').value;
   if (p1.length < 10) return setAuthError('密码至少 10 个字符；建议使用 12 个以上的长密码。');
   if (p1 !== p2) return setAuthError('两次密码不一致。');
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await deriveKey(p1, salt);
-  const check = await encryptBytes(enc.encode(CHECK_TEXT), key);
-  await idbPut('meta', {key:'vault', salt:bytesToB64(salt), checkIv:check.iv, checkCipher:bytesToB64(check.cipher), kdf:'PBKDF2-HMAC-SHA-256', iterations:KDF_ITERATIONS, createdAt:new Date().toISOString()});
-  currentKey = key; $('#newPassword').value=''; $('#confirmPassword').value='';
-  await enterApp();
+  const oldText = btn.textContent;
+  btn.disabled = true; btn.textContent = '正在创建…';
+  try {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await deriveKey(p1, salt);
+    const check = await encryptBytes(enc.encode(CHECK_TEXT), key);
+    await idbPut('meta', {key:'vault', salt:bytesToB64(salt), checkIv:check.iv, checkCipher:bytesToB64(check.cipher), kdf:'PBKDF2-HMAC-SHA-256', iterations:KDF_ITERATIONS, createdAt:new Date().toISOString()});
+    currentKey = key; $('#newPassword').value=''; $('#confirmPassword').value='';
+    await enterApp();
+    toast('加密柜已创建');
+  } catch (e) {
+    console.error(e);
+    setAuthError('创建失败。请刷新页面后重试；如果问题持续，请告诉我你使用的设备和浏览器。');
+  } finally {
+    btn.disabled = false; btn.textContent = oldText;
+  }
 }
 async function unlockVault() {
   setAuthError();
