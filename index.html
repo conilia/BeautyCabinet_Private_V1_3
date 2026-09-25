@@ -7,35 +7,46 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Beauty Cabinet">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'none'; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=1.3.1">
-  <title>Beauty Cabinet V1.3.1 Private</title>
+  <link rel="manifest" href="manifest.webmanifest?v=140">
+  <link rel="stylesheet" href="styles.css?v=140">
+  <title>Beauty Cabinet V1.4 Private</title>
 </head>
 <body>
 <div id="authScreen" class="auth-screen">
   <div class="auth-card">
     <div class="brand brand-large">Beauty Cabinet</div>
-    <div class="sub">V1.3.1 · Privacy Foundation</div>
+    <div class="sub"><span id="runtimeVersion">V1.4.0</span> · Private Local Vault</div>
     <div id="authMessage" class="privacy-note"></div>
+    <div id="authModeStatus" class="auth-status">正在检查本机加密柜…</div>
+
     <div id="setupBox" hidden>
       <h2>创建本地加密柜</h2>
-      <p class="note">密码不会上传，也不会保存在网页代码里。忘记密码后无法恢复已加密的数据。</p>
+      <p class="note">第一次使用这台设备时创建密码。密码不会上传；忘记密码后只能用加密备份恢复或清空本机柜子。</p>
       <label>Master Password</label>
-      <input id="newPassword" type="password" autocomplete="new-password" minlength="10" placeholder="建议至少 12 个字符">
+      <input id="newPassword" type="password" autocomplete="new-password" minlength="10" placeholder="至少 10 个字符，建议 12 个以上">
       <label>再次输入</label>
-      <input id="confirmPassword" type="password" autocomplete="new-password" minlength="10">
-      <button id="createVaultBtn" type="button">创建加密柜</button>
-      <button id="importNewDeviceBtn" class="secondary full" type="button">新设备：从加密备份恢复</button>
+      <input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" placeholder="再次输入相同密码">
+      <button id="createVaultBtn" class="full" type="button">创建加密柜</button>
+      <button id="importNewDeviceBtn" class="secondary full" type="button">从加密备份恢复到这台设备</button>
       <input id="importNewDeviceFile" type="file" accept=".beautybackup,application/json" hidden>
     </div>
+
     <div id="unlockBox" hidden>
       <h2>解锁 Beauty Cabinet</h2>
       <label>Master Password</label>
-      <input id="unlockPassword" type="password" autocomplete="current-password">
-      <button id="unlockBtn" type="button">解锁</button>
+      <input id="unlockPassword" type="password" autocomplete="current-password" placeholder="输入你创建柜子时的密码">
+      <button id="unlockBtn" class="full" type="button">解锁</button>
       <button id="importLockedBtn" class="secondary full" type="button">从加密备份恢复</button>
       <input id="importLockedFile" type="file" accept=".beautybackup,application/json" hidden>
+      <div class="reset-zone">
+        <b>如果这是测试阶段、你还没有正式数据</b>
+        <p class="note">若之前创建过程异常或忘记了测试密码，可以清空这台设备上的柜子，然后重新创建密码。</p>
+        <button id="resetVaultBtn" class="danger full" type="button">重置并创建新柜</button>
+      </div>
     </div>
     <div id="authError" class="error" role="alert"></div>
   </div>
@@ -43,114 +54,34 @@
 
 <div id="app" hidden>
 <header>
-  <div>
-    <div class="brand">Beauty Cabinet</div>
-    <div class="sub">本地优先 · 本地加密 · 无外部网络连接</div>
-  </div>
+  <div><div class="brand">Beauty Cabinet</div><div class="sub">本地优先 · 本地加密 · 不上传个人数据</div></div>
   <button id="lockBtn" class="icon-btn secondary" type="button" aria-label="锁定">🔒</button>
 </header>
 <main>
   <section id="home">
     <div class="hero">
       <h2>我的 Beauty Cabinet</h2>
-      <div class="note">这个版本不包含任何预置的个人产品或照片。你录入的数据会先加密，再写入本机 IndexedDB。</div>
-      <div class="actions">
-        <button id="homeAddBtn" type="button">＋ 添加产品</button>
-        <button id="homeBackupBtn" class="secondary" type="button">导出加密备份</button>
-      </div>
+      <div class="note">GitHub Pages 只托管空白 App 代码。你录入的产品资料和图片加密后保存在这台设备的 IndexedDB 中。</div>
+      <div class="actions"><button id="homeAddBtn" type="button">＋ 添加产品</button><button id="homeBackupBtn" class="secondary" type="button">导出加密备份</button></div>
     </div>
-    <div class="stats">
-      <div class="stat"><b id="count">0</b><span>已录入产品</span></div>
-      <div class="stat"><b id="imageCount">0</b><span>本地产品图</span></div>
-      <div class="stat"><b id="attentionCount">0</b><span>需要关注</span></div>
-    </div>
-    <div class="card">
-      <div class="title"><h3>隐私状态</h3><span class="status-badge">LOCAL</span></div>
-      <div class="privacy-grid">
-        <div><b>✓ 产品资料</b><span>AES-GCM 加密后存储</span></div>
-        <div><b>✓ 产品图片</b><span>压缩并加密后存储</span></div>
-        <div><b>✓ 网络</b><span>App 代码禁止主动联网</span></div>
-        <div><b>✓ 备份</b><span>导出的文件仍是密文</span></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="title"><h3>迁移与备份</h3></div>
-      <div class="toolbar">
-        <button class="secondary" id="exportBtn" type="button">导出加密备份</button>
-        <button class="secondary" id="importBtn" type="button">导入备份</button>
-        <button class="secondary" id="legacyImportBtn" type="button">导入 V1.2 JSON</button>
-      </div>
-      <input id="importFile" type="file" accept=".beautybackup,application/json" hidden>
-      <input id="legacyImportFile" type="file" accept="application/json" hidden>
-      <p class="note">换 iPhone/iPad/电脑时：旧设备导出 <code>.beautybackup</code> → 新设备打开这个 App → 导入 → 使用同一个 Master Password 解锁。</p>
-    </div>
+    <div class="stats"><div class="stat"><b id="count">0</b><span>已录入产品</span></div><div class="stat"><b id="imageCount">0</b><span>本地产品图</span></div><div class="stat"><b id="attentionCount">0</b><span>需要关注</span></div></div>
+    <div class="card"><div class="title"><h3>隐私状态</h3><span class="status-badge">LOCAL</span></div><div class="privacy-grid"><div><b>✓ 产品资料</b><span>AES-GCM 加密后存储</span></div><div><b>✓ 产品图片</b><span>压缩并加密后存储</span></div><div><b>✓ 网络</b><span>个人数据不主动上传</span></div><div><b>✓ 迁移</b><span>加密备份可跨设备恢复</span></div></div></div>
+    <div class="card"><div class="title"><h3>迁移与备份</h3></div><div class="toolbar"><button class="secondary" id="exportBtn" type="button">导出加密备份</button><button class="secondary" id="importBtn" type="button">导入备份</button><button class="secondary" id="legacyImportBtn" type="button">导入 V1.2 JSON</button></div><input id="importFile" type="file" accept=".beautybackup,application/json" hidden><input id="legacyImportFile" type="file" accept="application/json" hidden><p class="note">换设备：旧设备导出 <code>.beautybackup</code> → 新设备导入 → 使用同一个 Master Password 解锁。</p></div>
   </section>
 
   <section id="cabinet" hidden>
-    <div class="card">
-      <div class="title"><h3>我的化妆柜</h3><button id="addBtn" type="button">＋ 添加</button></div>
-      <div class="scan-box">
-        <b>📷 图片策略</b>
-        <div class="note">可直接选“我的实物图”，也可先把官网产品图保存到 Photos/Files，再导入并标记为“官方产品图”。为了隐私，本版不会直接连接品牌网站加载图片。</div>
-      </div>
-    </div>
-    <div id="emptyCabinet" class="empty-state" hidden>
-      <div class="empty-icon">🧴</div><b>还没有产品</b><p>先添加第一件化妆品或护肤品。</p>
-    </div>
-    <div id="products" class="grid"></div>
+    <div class="card"><div class="title"><h3>我的化妆柜</h3><button id="addBtn" type="button">＋ 添加</button></div><div class="scan-box"><b>📷 产品图片</b><div class="note">可导入自己的实物图，或把官网产品图先保存到 Photos/Files 再导入。App 不会直接访问品牌网站加载图片。</div></div></div>
+    <div id="emptyCabinet" class="empty-state" hidden><div class="empty-icon">🧴</div><b>还没有产品</b><p>先添加第一件化妆品或护肤品。</p></div><div id="products" class="grid"></div>
   </section>
 
-  <section id="compare" hidden>
-    <div class="card">
-      <div class="title"><h3>Similar & Overlap</h3></div>
-      <div class="note">选择 2–4 件产品，本地比较类别、颜色描述、质地、适配说明和用途。此版本不把你的收藏发送给云端 AI。</div>
-      <div id="comparePicker" class="compare-picker"></div>
-      <button id="runCompareBtn" type="button" disabled>比较所选产品</button>
-    </div>
-    <div id="compareResult"></div>
-  </section>
-
-  <section id="expiry" hidden>
-    <div class="card"><div class="title"><h3>Expiry & Check</h3></div><div id="expiryList"></div></div>
-  </section>
-
-  <section id="settings" hidden>
-    <div class="card">
-      <div class="title"><h3>Privacy & Data</h3></div>
-      <div class="kv">
-        <div>Storage</div><div>IndexedDB（本机）</div>
-        <div>Encryption</div><div>AES-256-GCM</div>
-        <div>KDF</div><div>PBKDF2-HMAC-SHA-256 · 600,000 iterations</div>
-        <div>Network API</div><div>Disabled by Content Security Policy</div>
-      </div>
-      <div class="toolbar top-gap">
-        <button id="settingsExportBtn" class="secondary" type="button">导出加密备份</button>
-        <button id="clearBtn" class="danger" type="button">删除本机全部数据</button>
-      </div>
-    </div>
-    <div class="card">
-      <b>重要说明</b>
-      <p class="note">这个版本不会把产品信息、图片或密码上传到 GitHub。GitHub Pages 只托管空白 App 代码。浏览器解锁期间密钥只保存在当前页面内存里；锁定/刷新后需重新输入密码。</p>
-    </div>
-  </section>
+  <section id="compare" hidden><div class="card"><div class="title"><h3>Similar & Overlap</h3></div><div class="note">选择 2–4 件产品，在本机比较类别、颜色、质地、适配和用途。</div><div id="comparePicker" class="compare-picker"></div><button id="runCompareBtn" type="button" disabled>比较所选产品</button></div><div id="compareResult"></div></section>
+  <section id="expiry" hidden><div class="card"><div class="title"><h3>Expiry & Check</h3></div><div id="expiryList"></div></div></section>
+  <section id="settings" hidden><div class="card"><div class="title"><h3>Privacy & Data</h3></div><div class="kv"><div>Storage</div><div>IndexedDB（本机）</div><div>Encryption</div><div>AES-256-GCM</div><div>KDF</div><div>PBKDF2-HMAC-SHA-256 · 600,000 iterations</div><div>Version</div><div>V1.4.0</div></div><div class="toolbar top-gap"><button id="settingsExportBtn" class="secondary" type="button">导出加密备份</button><button id="clearBtn" class="danger" type="button">删除本机全部数据</button></div></div></section>
 </main>
-
-<nav><div class="nav-inner">
-  <button class="active" data-tab="home" type="button">Today</button>
-  <button data-tab="cabinet" type="button">Cabinet</button>
-  <button data-tab="compare" type="button">Compare</button>
-  <button data-tab="expiry" type="button">Expiry</button>
-  <button data-tab="settings" type="button">Privacy</button>
-</div></nav>
+<nav><div class="nav-inner"><button class="active" data-tab="home" type="button">Today</button><button data-tab="cabinet" type="button">Cabinet</button><button data-tab="compare" type="button">Compare</button><button data-tab="expiry" type="button">Expiry</button><button data-tab="settings" type="button">Privacy</button></div></nav>
 </div>
 
-<div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="sheet">
-    <div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div>
-    <div id="modalBody"></div>
-  </div>
-</div>
-
-<script src="app.js?v=1.3.1" defer></script>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true"><div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div></div>
+<script src="app.js?v=140" defer></script>
 </body>
 </html>

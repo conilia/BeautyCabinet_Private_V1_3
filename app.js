@@ -1,10 +1,10 @@
 (() => {
 'use strict';
 
-const DB_NAME = 'beauty-cabinet-private-v13';
+const DB_NAME = 'beauty-cabinet-private-v14';
 const DB_VERSION = 1;
 const KDF_ITERATIONS = 600000;
-const CHECK_TEXT = 'BEAUTY_CABINET_PRIVATE_V13';
+const CHECK_TEXT = 'BEAUTY_CABINET_PRIVATE_V14';
 const MAX_IMAGE_DIM = 1100;
 const IMAGE_QUALITY = 0.82;
 const AUTO_LOCK_MS = 10 * 60 * 1000;
@@ -21,6 +21,23 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+
+async function cleanupLegacyWebState() {
+  // V1.2 registered a cache-first service worker. Remove it and its caches so
+  // iPhone/iPad do not keep serving an obsolete HTML shell after an update.
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+  } catch (e) { console.warn('service worker cleanup skipped', e); }
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter(k => k.startsWith('beauty-cabinet-')).map(k => caches.delete(k)));
+    }
+  } catch (e) { console.warn('cache cleanup skipped', e); }
+}
 
 function esc(v = '') {
   return String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -121,17 +138,17 @@ async function decryptJSON(rec) {
 
 async function initializeAuth() {
   const meta = await idbGet('meta','vault');
-  $('#authMessage').textContent = '产品资料和图片不会写入 GitHub。只有输入 Master Password 后，这台设备才能解密本地柜子。';
-  if (meta) {
-    $('#setupBox').hidden = true; $('#unlockBox').hidden = false;
-    setTimeout(() => $('#unlockPassword').focus(), 80);
-  } else {
-    $('#setupBox').hidden = false; $('#unlockBox').hidden = true;
-    setTimeout(() => $('#newPassword').focus(), 80);
-  }
+  $('#authMessage').textContent = '产品资料、图片和密码不会写入 GitHub。你的柜子只保存在当前设备的加密本地数据库中。';
+  $('#setupBox').hidden = !!meta;
+  $('#unlockBox').hidden = !meta;
+  $('#authModeStatus').textContent = meta ? '检测到本机加密柜：请输入 Master Password 解锁。' : '这台设备还没有加密柜：请创建 Master Password。';
+  setAuthError();
+  setTimeout(() => (meta ? $('#unlockPassword') : $('#newPassword'))?.focus(), 80);
 }
 async function createVault() {
   setAuthError();
+  const existingMeta = await idbGet('meta','vault');
+  if (existingMeta) { await initializeAuth(); return setAuthError('这台设备已经有加密柜。如忘记密码，请使用“重置并创建新柜”。'); }
   const btn = $('#createVaultBtn');
   const p1 = $('#newPassword').value; const p2 = $('#confirmPassword').value;
   if (p1.length < 10) return setAuthError('密码至少 10 个字符；建议使用 12 个以上的长密码。');
@@ -144,6 +161,7 @@ async function createVault() {
     const check = await encryptBytes(enc.encode(CHECK_TEXT), key);
     await idbPut('meta', {key:'vault', salt:bytesToB64(salt), checkIv:check.iv, checkCipher:bytesToB64(check.cipher), kdf:'PBKDF2-HMAC-SHA-256', iterations:KDF_ITERATIONS, createdAt:new Date().toISOString()});
     currentKey = key; $('#newPassword').value=''; $('#confirmPassword').value='';
+    $('#authModeStatus').textContent='加密柜创建成功，正在进入…';
     await enterApp();
     toast('加密柜已创建');
   } catch (e) {
@@ -168,6 +186,7 @@ async function unlockVault() {
   } catch (e) { setAuthError('密码不正确，或这个加密柜已损坏。'); }
 }
 async function enterApp() {
+  try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch(e) {}
   $('#authScreen').hidden = true; $('#app').hidden = false; lastActivity = Date.now();
   await reloadProducts(); renderAll();
 }
@@ -379,11 +398,36 @@ async function importLegacy(file){
 async function clearAllData(){
   if(!confirm('这会永久删除这台设备上的 Beauty Cabinet 数据。请先确认已经导出加密备份。继续？'))return;
   if(!confirm('最后确认：删除后无法撤销。'))return;
-  currentKey=null;revokeAllImages();if(db)db.close();await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(DB_NAME);r.onsuccess=()=>resolve();r.onerror=()=>reject(r.error);r.onblocked=()=>resolve();});location.reload();
+  try {
+    currentKey=null; products=[]; revokeAllImages();
+    await idbClear('products'); await idbClear('images'); await idbClear('meta');
+    $('#app').hidden=true; $('#authScreen').hidden=false;
+    await initializeAuth();
+    toast('本机数据已删除');
+  } catch(e) { console.error(e); alert('删除失败，请关闭其他页面后重试。'); }
 }
 
+async function resetVaultFromLockScreen(){
+  setAuthError();
+  if(!confirm('这会清空这台设备上的 Beauty Cabinet 本地数据，并重新创建密码。若已有正式数据，请先导出加密备份。继续？')) return;
+  if(!confirm('最后确认：本机现有 Beauty Cabinet 数据将被永久删除。')) return;
+  try {
+    currentKey = null; products = []; revokeAllImages();
+    await idbClear('products');
+    await idbClear('images');
+    await idbClear('meta');
+    $('#unlockPassword').value='';
+    $('#newPassword').value='';
+    $('#confirmPassword').value='';
+    await initializeAuth();
+    toast('本机柜子已清空，请创建新密码');
+  } catch(e) {
+    console.error(e);
+    setAuthError('重置失败。请关闭其他打开的 Beauty Cabinet 页面，再刷新重试。');
+  }
+}
 function bindEvents(){
-  $('#createVaultBtn').addEventListener('click',createVault);$('#unlockBtn').addEventListener('click',unlockVault);$('#lockBtn').addEventListener('click',lockApp);
+  $('#createVaultBtn').addEventListener('click',createVault);$('#unlockBtn').addEventListener('click',unlockVault);$('#resetVaultBtn').addEventListener('click',resetVaultFromLockScreen);$('#lockBtn').addEventListener('click',lockApp);
   $('#unlockPassword').addEventListener('keydown',e=>{if(e.key==='Enter')unlockVault();});$('#confirmPassword').addEventListener('keydown',e=>{if(e.key==='Enter')createVault();});
   $('#homeAddBtn').addEventListener('click',()=>openProductForm());$('#addBtn').addEventListener('click',()=>openProductForm());$('#closeModalBtn').addEventListener('click',closeModal);
   $('#exportBtn').addEventListener('click',exportBackup);$('#homeBackupBtn').addEventListener('click',exportBackup);$('#settingsExportBtn').addEventListener('click',exportBackup);
@@ -404,8 +448,9 @@ function bindEvents(){
 }
 
 async function start(){
+  $('#runtimeVersion').textContent='V1.4.0';
   if(!window.crypto?.subtle||!window.indexedDB){document.body.innerHTML='<main><div class="card"><b>当前浏览器不支持所需的本地加密功能。</b><p>请使用较新的 Safari / Chrome / Edge。</p></div></main>';return;}
-  try{db=await openDB();bindEvents();await initializeAuth();}catch(e){console.error(e);setAuthError('无法打开本地数据库。请检查 Safari 是否处于可用的正常浏览模式。');}
+  try{await cleanupLegacyWebState();db=await openDB();bindEvents();await initializeAuth();}catch(e){console.error(e);setAuthError('无法打开本地数据库。请检查 Safari 是否处于可用的正常浏览模式。');}
 }
 
 document.addEventListener('DOMContentLoaded',start);
