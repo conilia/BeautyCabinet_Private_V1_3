@@ -1,31 +1,48 @@
-Beauty Cabinet V1.5.0 — Local-first, no daily password
+Beauty Cabinet V1.6.0 — dual-image product records and stronger overlap analysis
 
 WHAT CHANGED
-- Removed the app login / PIN / Master Password flow completely.
-- The app opens directly into Cabinet on iPhone, iPad and Windows browsers.
-- Product records and compressed product images are stored only in local IndexedDB.
-- GitHub Pages hosts only generic app code; do not commit personal exports or images.
-- Daily local data is intentionally NOT encrypted so there is no login friction.
-- Exported .beautybackup files ARE encrypted with AES-256-GCM.
-- Backup encryption key is derived from a backup-only password with PBKDF2-HMAC-SHA-256.
-- Backup password is only requested when exporting/restoring a migration backup.
-- Product images are resized to max 1100 px before local storage.
-- Old Beauty Cabinet service workers/caches are actively removed to avoid stale iOS pages.
+- Each product can now keep two separate local images:
+  1. your real-life product photo
+  2. a locally saved copy of an official / online product image
+- An optional source URL can be recorded as text. The app never hotlinks or automatically requests it.
+- Cabinet cards show a thumbnail, preferring your real-life photo and falling back to the official/online local copy.
+- Similar & Overlap now distinguishes:
+  True Duplicate, Color Duplicate, Functional Duplicate, Complementary, and Low Overlap.
+- Every pair result shows shared attributes and field-by-field differences.
+- Backup passwords are entered in an in-app dialog instead of browser prompt boxes for better iPhone/iPad behavior.
+- Encrypted backup restore is now an atomic IndexedDB transaction, so a failed restore does not leave a partially replaced cabinet.
 
-IMPORTANT PRIVACY TRADEOFF
-Because there is no daily password, someone who can access an already-unlocked device/browser profile or its local browser data may be able to read the local Beauty Cabinet database. The encrypted backup protects the migration file, not the live local database.
+DATA AND BACKUP COMPATIBILITY
+- The IndexedDB name remains: beauty-cabinet-local-v15
+- Existing V1.5 local product data is read in place; no copy or reset is required.
+- The encrypted .beautybackup envelope remains version 2.
+- V1.5 encrypted backups can be imported by V1.6.
+- V1.6 backups include both image types, their local image bytes, the optional source URL, settings, and all product fields.
+- The legacy imageId field is retained as the preferred-image pointer for backward compatibility.
 
-GITHUB PAGES UPDATE
+PRIVACY
+- Product data and image bytes remain only in the browser's local IndexedDB.
+- GitHub Pages hosts only the generic app files in this folder.
+- No analytics, trackers, telemetry, remote database, third-party SDK, or remote image hotlinking is used.
+- The live local database is intentionally not encrypted because the app has no daily login.
+- Exported .beautybackup files are encrypted with AES-256-GCM.
+- Backup keys are derived with PBKDF2-HMAC-SHA-256 (300,000 iterations) and a random salt.
+
+DEPLOY TO GITHUB PAGES
 1. Upload ALL files in this folder to the repository root and commit.
-2. Wait for Pages deployment to finish.
-3. On iPhone/iPad open the site once with ?v=150 appended, e.g.
-   https://USERNAME.github.io/REPO/?v=150
-4. Confirm the header says V1.5.0.
-5. Test: add product -> reload -> product remains -> export encrypted backup.
+2. Wait for GitHub Pages deployment to finish.
+3. On each iPhone/iPad/Windows browser, open the site once with ?v=160 appended:
+   https://USERNAME.github.io/REPO/?v=160
+4. Confirm the header says V1.6.0.
+5. The original site URL can be used normally after the new version appears.
 
-BACKUP / DEVICE MIGRATION
-Old device: Privacy/Home -> Export encrypted backup -> choose a backup password.
-New device: open the same app -> Import encrypted backup -> choose file -> enter the same backup password.
+RECOMMENDED CHECK
+1. Open the existing cabinet and confirm V1.5 products still appear.
+2. Add both image types to one product and confirm its Cabinet thumbnail.
+3. Reload and confirm both images remain.
+4. Compare 2–4 products and review relationship type plus differences.
+5. Export an encrypted backup.
+6. Restore it on a test browser/profile and confirm both image types return.
 
-V1.4 NOTE
-V1.5 uses a new local database. It does not silently delete the old V1.4 encrypted test vault and does not automatically import it. If V1.4 contained important data, retain its backup before removing anything. If it was only test data, simply start fresh in V1.5.
+SAFARI / STORAGE NOTE
+iPhone and iPad Safari can remove website storage under device pressure or when site data is cleared. Keep periodic encrypted .beautybackup files outside the browser. Private Browsing is not suitable for durable storage.

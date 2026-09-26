@@ -1,6 +1,7 @@
 {
-  "name": "Beauty Cabinet Local",
+  "name": "Beauty Cabinet Local V1.6",
   "short_name": "Beauty Cabinet",
+  "id": "./",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#f6f2ee",

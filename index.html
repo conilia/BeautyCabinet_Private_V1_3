@@ -11,16 +11,16 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'none'; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
-  <link rel="manifest" href="manifest.webmanifest?v=150">
-  <link rel="stylesheet" href="styles.css?v=150">
-  <title>Beauty Cabinet V1.5 Local</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1600">
+  <link rel="stylesheet" href="styles.css?v=1600">
+  <title>Beauty Cabinet V1.6 Local</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.5.0 · 本地优先 · 无登录 · 加密备份</div>
+    <div class="sub">V1.6.0 · 双图档案 · 智能重叠分析 · 加密备份</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -36,7 +36,7 @@
     </div>
     <div class="stats">
       <div class="stat"><b id="count">0</b><span>已录入产品</span></div>
-      <div class="stat"><b id="imageCount">0</b><span>本地产品图</span></div>
+      <div class="stat"><b id="imageCount">0</b><span>本地图片</span></div>
       <div class="stat"><b id="attentionCount">0</b><span>需要关注</span></div>
     </div>
     <div class="card">
@@ -65,7 +65,7 @@
   <section id="cabinet" hidden>
     <div class="card">
       <div class="title"><h3>我的化妆柜</h3><button id="addBtn" type="button">＋ 添加</button></div>
-      <div class="scan-box"><b>📷 产品图片</b><div class="note">可导入自己的实物图，或把官网产品图先保存到 Photos/Files 再导入。App 不会直接访问品牌网站加载图片。</div></div>
+      <div class="scan-box"><b>📷 双图产品档案</b><div class="note">每件产品可分别保存“我的实物图”和“官方/网上产品图”的本地副本；Cabinet 优先显示实物图缩略图。来源网址只作文字记录，App 不会自动访问或热链远程图片。</div></div>
     </div>
     <div id="emptyCabinet" class="empty-state" hidden><div class="empty-icon">🧴</div><b>还没有产品</b><p>先添加第一件化妆品或护肤品。</p></div>
     <div id="products" class="grid"></div>
@@ -74,7 +74,10 @@
   <section id="compare" hidden>
     <div class="card">
       <div class="title"><h3>Similar & Overlap</h3></div>
-      <div class="note">选择 2–4 件产品，在本机比较类别、颜色、质地、适配和用途。</div>
+      <div class="note">选择 2–4 件产品，在本机分析共同点与差异。结果会区分 True Duplicate、Color Duplicate、Functional Duplicate、Complementary；信息不足或无明显关系时会显示 Low Overlap。</div>
+      <div class="relation-legend" aria-label="关系类型说明">
+        <span class="legend-true">True Duplicate</span><span class="legend-color">Color Duplicate</span><span class="legend-functional">Functional Duplicate</span><span class="legend-complementary">Complementary</span>
+      </div>
       <div id="comparePicker" class="compare-picker"></div>
       <button id="runCompareBtn" type="button" disabled>比较所选产品</button>
     </div>
@@ -93,7 +96,7 @@
         <div>Daily login</div><div>无</div>
         <div>Backup</div><div>AES-256-GCM + PBKDF2</div>
         <div>Network</div><div>个人数据不主动上传</div>
-        <div>Version</div><div>V1.5.0</div>
+        <div>Version</div><div>V1.6.0</div>
       </div>
       <div class="toolbar top-gap">
         <button id="settingsExportBtn" class="secondary" type="button">导出加密备份</button>
@@ -114,6 +117,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=150" defer></script>
+<script src="app.js?v=1600" defer></script>
 </body>
 </html>
