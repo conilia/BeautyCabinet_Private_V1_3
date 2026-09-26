@@ -1,6 +1,7 @@
-Beauty Cabinet V1.6.0 — dual-image product records and stronger overlap analysis
+Beauty Cabinet V1.6.1 — dual-image product records and stronger overlap analysis
 
 WHAT CHANGED
+- V1.6.1 removes the encrypted-backup file-picker type filter that caused files to appear disabled in iPhone/iPad Files. Backup structure is still validated after selection.
 - Each product can now keep two separate local images:
   1. your real-life product photo
   2. a locally saved copy of an official / online product image
@@ -31,9 +32,9 @@ PRIVACY
 DEPLOY TO GITHUB PAGES
 1. Upload ALL files in this folder to the repository root and commit.
 2. Wait for GitHub Pages deployment to finish.
-3. On each iPhone/iPad/Windows browser, open the site once with ?v=160 appended:
-   https://USERNAME.github.io/REPO/?v=160
-4. Confirm the header says V1.6.0.
+3. On each iPhone/iPad/Windows browser, open the site once with ?v=161 appended:
+   https://USERNAME.github.io/REPO/?v=161
+4. Confirm the header says V1.6.1.
 5. The original site URL can be used normally after the new version appears.
 
 RECOMMENDED CHECK

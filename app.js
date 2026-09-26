@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 1;
 const BACKUP_KDF_ITERATIONS = 300000;

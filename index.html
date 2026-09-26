@@ -11,16 +11,16 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'none'; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
-  <link rel="manifest" href="manifest.webmanifest?v=1600">
-  <link rel="stylesheet" href="styles.css?v=1600">
-  <title>Beauty Cabinet V1.6 Local</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1610">
+  <link rel="stylesheet" href="styles.css?v=1610">
+  <title>Beauty Cabinet V1.6.1 Local</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.6.0 · 双图档案 · 智能重叠分析 · 加密备份</div>
+    <div class="sub">V1.6.1 · 双图档案 · 智能重叠分析 · 加密备份</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -56,7 +56,7 @@
         <button class="secondary" id="importBtn" type="button">导入加密备份</button>
         <button class="secondary" id="legacyImportBtn" type="button">导入 V1.2 JSON</button>
       </div>
-      <input id="importFile" type="file" accept=".beautybackup,application/json" hidden>
+      <input id="importFile" type="file" hidden>
       <input id="legacyImportFile" type="file" accept="application/json" hidden>
       <p class="note">换设备：旧设备导出 <code>.beautybackup</code> → 把文件传到新设备 → 导入 → 输入当时设置的备份密码。</p>
     </div>
@@ -96,7 +96,7 @@
         <div>Daily login</div><div>无</div>
         <div>Backup</div><div>AES-256-GCM + PBKDF2</div>
         <div>Network</div><div>个人数据不主动上传</div>
-        <div>Version</div><div>V1.6.0</div>
+        <div>Version</div><div>V1.6.1</div>
       </div>
       <div class="toolbar top-gap">
         <button id="settingsExportBtn" class="secondary" type="button">导出加密备份</button>
@@ -117,6 +117,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=1600" defer></script>
+<script src="app.js?v=1610" defer></script>
 </body>
 </html>
