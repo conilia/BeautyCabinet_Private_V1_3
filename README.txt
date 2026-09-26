@@ -1,23 +1,31 @@
-Beauty Cabinet V1.4.0 — Private local vault
+Beauty Cabinet V1.5.0 — Local-first, no daily password
 
 WHAT CHANGED
-- No personal products/photos are included in the source code.
-- Removed cache-first PWA behavior that caused old iPhone/iPad pages to stay stuck.
-- Old Beauty Cabinet service workers/caches are actively removed.
-- Reset now clears IndexedDB stores in place instead of deleting the database, which is more reliable on iOS.
-- If a test vault exists but you do not know its password, use “重置并创建新柜”.
-- Product data and imported product images are encrypted locally with AES-256-GCM.
-- Encrypted .beautybackup export/import remains available for device migration.
+- Removed the app login / PIN / Master Password flow completely.
+- The app opens directly into Cabinet on iPhone, iPad and Windows browsers.
+- Product records and compressed product images are stored only in local IndexedDB.
+- GitHub Pages hosts only generic app code; do not commit personal exports or images.
+- Daily local data is intentionally NOT encrypted so there is no login friction.
+- Exported .beautybackup files ARE encrypted with AES-256-GCM.
+- Backup encryption key is derived from a backup-only password with PBKDF2-HMAC-SHA-256.
+- Backup password is only requested when exporting/restoring a migration backup.
+- Product images are resized to max 1100 px before local storage.
+- Old Beauty Cabinet service workers/caches are actively removed to avoid stale iOS pages.
+
+IMPORTANT PRIVACY TRADEOFF
+Because there is no daily password, someone who can access an already-unlocked device/browser profile or its local browser data may be able to read the local Beauty Cabinet database. The encrypted backup protects the migration file, not the live local database.
 
 GITHUB PAGES UPDATE
 1. Upload ALL files in this folder to the repository root and commit.
 2. Wait for Pages deployment to finish.
-3. On iPhone/iPad open the site in Safari with ?v=140 appended once, e.g.
-   https://USERNAME.github.io/REPO/?v=140
-4. Confirm the login card says V1.4.0.
-5. If an old test vault is detected and you do not know its password, tap “重置并创建新柜”.
-6. Create a new Master Password and test adding one product.
-7. Export a .beautybackup before entering lots of real data.
+3. On iPhone/iPad open the site once with ?v=150 appended, e.g.
+   https://USERNAME.github.io/REPO/?v=150
+4. Confirm the header says V1.5.0.
+5. Test: add product -> reload -> product remains -> export encrypted backup.
 
-PRIVACY
-GitHub Pages hosts only the app code. Product data/images are stored in the browser's local IndexedDB and encrypted before storage. Do not commit exported backups or personal images to GitHub.
+BACKUP / DEVICE MIGRATION
+Old device: Privacy/Home -> Export encrypted backup -> choose a backup password.
+New device: open the same app -> Import encrypted backup -> choose file -> enter the same backup password.
+
+V1.4 NOTE
+V1.5 uses a new local database. It does not silently delete the old V1.4 encrypted test vault and does not automatically import it. If V1.4 contained important data, retain its backup before removing anything. If it was only test data, simply start fresh in V1.5.

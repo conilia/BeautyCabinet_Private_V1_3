@@ -1,21 +1,16 @@
 (() => {
 'use strict';
 
-const DB_NAME = 'beauty-cabinet-private-v14';
+const APP_VERSION = '1.5.0';
+const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 1;
-const KDF_ITERATIONS = 600000;
-const CHECK_TEXT = 'BEAUTY_CABINET_PRIVATE_V14';
+const BACKUP_KDF_ITERATIONS = 300000;
 const MAX_IMAGE_DIM = 1100;
 const IMAGE_QUALITY = 0.82;
-const AUTO_LOCK_MS = 10 * 60 * 1000;
-const BACKGROUND_LOCK_MS = 5 * 60 * 1000;
 
 let db = null;
-let currentKey = null;
 let products = [];
 let imageUrls = new Map();
-let lastActivity = Date.now();
-let hiddenAt = 0;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -23,8 +18,6 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 async function cleanupLegacyWebState() {
-  // V1.2 registered a cache-first service worker. Remove it and its caches so
-  // iPhone/iPad do not keep serving an obsolete HTML shell after an update.
   try {
     if ('serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
@@ -64,18 +57,17 @@ function b64ToBytes(s) {
 function toast(msg) {
   const old = $('.toast'); if (old) old.remove();
   const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
-  document.body.appendChild(el); setTimeout(() => el.remove(), 2400);
+  document.body.appendChild(el); setTimeout(() => el.remove(), 2500);
 }
-function setAuthError(msg = '') { $('#authError').textContent = msg; }
 
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const d = req.result;
-      if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', {keyPath:'key'});
       if (!d.objectStoreNames.contains('products')) d.createObjectStore('products', {keyPath:'id'});
       if (!d.objectStoreNames.contains('images')) d.createObjectStore('images', {keyPath:'id'});
+      if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings', {keyPath:'key'});
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -102,148 +94,66 @@ function idbPut(store, value) {
 function idbDelete(store, key) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(key);
-    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
   });
 }
 function idbClear(store) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readwrite'); tx.objectStore(store).clear();
-    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
   });
 }
 
-async function deriveKey(password, saltBytes) {
-  const material = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    {name:'PBKDF2', salt:saltBytes, iterations:KDF_ITERATIONS, hash:'SHA-256'},
-    material,
-    {name:'AES-GCM', length:256},
-    false,
-    ['encrypt','decrypt']
-  );
-}
-async function encryptBytes(bytes, key = currentKey) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, bytes);
-  return {iv: bytesToB64(iv), cipher};
-}
-async function decryptBytes(ivB64, cipher, key = currentKey) {
-  return crypto.subtle.decrypt({name:'AES-GCM', iv:b64ToBytes(ivB64)}, key, cipher);
-}
-async function encryptJSON(obj) { return encryptBytes(enc.encode(JSON.stringify(obj))); }
-async function decryptJSON(rec) {
-  const plain = await decryptBytes(rec.iv, rec.cipher);
-  return JSON.parse(dec.decode(plain));
-}
-
-async function initializeAuth() {
-  const meta = await idbGet('meta','vault');
-  $('#authMessage').textContent = '产品资料、图片和密码不会写入 GitHub。你的柜子只保存在当前设备的加密本地数据库中。';
-  $('#setupBox').hidden = !!meta;
-  $('#unlockBox').hidden = !meta;
-  $('#authModeStatus').textContent = meta ? '检测到本机加密柜：请输入 Master Password 解锁。' : '这台设备还没有加密柜：请创建 Master Password。';
-  setAuthError();
-  setTimeout(() => (meta ? $('#unlockPassword') : $('#newPassword'))?.focus(), 80);
-}
-async function createVault() {
-  setAuthError();
-  const existingMeta = await idbGet('meta','vault');
-  if (existingMeta) { await initializeAuth(); return setAuthError('这台设备已经有加密柜。如忘记密码，请使用“重置并创建新柜”。'); }
-  const btn = $('#createVaultBtn');
-  const p1 = $('#newPassword').value; const p2 = $('#confirmPassword').value;
-  if (p1.length < 10) return setAuthError('密码至少 10 个字符；建议使用 12 个以上的长密码。');
-  if (p1 !== p2) return setAuthError('两次密码不一致。');
-  const oldText = btn.textContent;
-  btn.disabled = true; btn.textContent = '正在创建…';
-  try {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const key = await deriveKey(p1, salt);
-    const check = await encryptBytes(enc.encode(CHECK_TEXT), key);
-    await idbPut('meta', {key:'vault', salt:bytesToB64(salt), checkIv:check.iv, checkCipher:bytesToB64(check.cipher), kdf:'PBKDF2-HMAC-SHA-256', iterations:KDF_ITERATIONS, createdAt:new Date().toISOString()});
-    currentKey = key; $('#newPassword').value=''; $('#confirmPassword').value='';
-    $('#authModeStatus').textContent='加密柜创建成功，正在进入…';
-    await enterApp();
-    toast('加密柜已创建');
-  } catch (e) {
-    console.error(e);
-    setAuthError('创建失败。请刷新页面后重试；如果问题持续，请告诉我你使用的设备和浏览器。');
-  } finally {
-    btn.disabled = false; btn.textContent = oldText;
-  }
-}
-async function unlockVault() {
-  setAuthError();
-  const password = $('#unlockPassword').value;
-  if (!password) return setAuthError('请输入 Master Password。');
-  const meta = await idbGet('meta','vault');
-  if (!meta) return initializeAuth();
-  try {
-    const key = await deriveKey(password, b64ToBytes(meta.salt));
-    const plain = await decryptBytes(meta.checkIv, b64ToBytes(meta.checkCipher).buffer, key);
-    if (dec.decode(plain) !== CHECK_TEXT) throw new Error('bad password');
-    currentKey = key; $('#unlockPassword').value='';
-    await enterApp();
-  } catch (e) { setAuthError('密码不正确，或这个加密柜已损坏。'); }
-}
-async function enterApp() {
-  try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch(e) {}
-  $('#authScreen').hidden = true; $('#app').hidden = false; lastActivity = Date.now();
-  await reloadProducts(); renderAll();
-}
-function lockApp() {
-  currentKey = null; products = []; closeModal(); revokeAllImages();
-  $('#products').innerHTML=''; $('#expiryList').innerHTML=''; $('#comparePicker').innerHTML=''; $('#compareResult').innerHTML='';
-  $('#app').hidden = true; $('#authScreen').hidden = false; setAuthError();
-  $('#setupBox').hidden = true; $('#unlockBox').hidden = false;
-  setTimeout(() => $('#unlockPassword').focus(),80);
-}
-
-async function saveEncryptedProduct(p) {
-  p.updatedAt = new Date().toISOString(); if (!p.createdAt) p.createdAt = p.updatedAt;
-  const encrypted = await encryptJSON(p);
-  await idbPut('products', {id:p.id, iv:encrypted.iv, cipher:encrypted.cipher, updatedAt:p.updatedAt});
-}
 async function reloadProducts() {
-  if (!currentKey) return;
-  const rows = await idbGetAll('products'); const out=[];
-  for (const row of rows) {
-    try { out.push(await decryptJSON(row)); } catch(e) { /* skip unreadable record */ }
-  }
-  products = out.sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  products = (await idbGetAll('products')).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+}
+async function saveProduct(p) {
+  p.updatedAt = new Date().toISOString();
+  if (!p.createdAt) p.createdAt = p.updatedAt;
+  await idbPut('products', p);
 }
 
 function fileToImage(file) {
   return new Promise((resolve,reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error);
-    reader.onload = () => { const img = new Image(); img.onload=()=>resolve(img); img.onerror=()=>reject(new Error('image decode failed')); img.src=reader.result; };
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('image decode failed'));
+      img.src = reader.result;
+    };
     reader.readAsDataURL(file);
   });
 }
 async function compressImage(file) {
   const img = await fileToImage(file);
   const scale = Math.min(1, MAX_IMAGE_DIM / Math.max(img.naturalWidth, img.naturalHeight));
-  const width = Math.max(1, Math.round(img.naturalWidth * scale)); const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
   const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
-  const ctx = canvas.getContext('2d', {alpha:false}); ctx.drawImage(img,0,0,width,height);
+  const ctx = canvas.getContext('2d', {alpha:false});
+  ctx.drawImage(img, 0, 0, width, height);
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', IMAGE_QUALITY));
   if (!blob) throw new Error('image compression failed');
   return {blob,width,height,mime:'image/jpeg'};
 }
 async function storeImage(productId, file, source, oldImageId='') {
-  const img = await compressImage(file); const bytes = await img.blob.arrayBuffer(); const encrypted = await encryptBytes(bytes);
+  const img = await compressImage(file);
+  const data = await img.blob.arrayBuffer();
   const id = uuid();
-  await idbPut('images', {id,productId,iv:encrypted.iv,cipher:encrypted.cipher,mime:img.mime,width:img.width,height:img.height,source,updatedAt:new Date().toISOString()});
+  await idbPut('images', {id,productId,data,mime:img.mime,width:img.width,height:img.height,source,updatedAt:new Date().toISOString()});
   if (oldImageId) { await idbDelete('images',oldImageId); revokeImage(oldImageId); }
   return id;
 }
 async function imageObjectURL(imageId) {
-  if (!imageId) return null; if (imageUrls.has(imageId)) return imageUrls.get(imageId);
-  const rec = await idbGet('images',imageId); if (!rec || !currentKey) return null;
-  try {
-    const plain = await decryptBytes(rec.iv,rec.cipher); const url = URL.createObjectURL(new Blob([plain],{type:rec.mime||'image/jpeg'}));
-    imageUrls.set(imageId,url); return url;
-  } catch(e) { return null; }
+  if (!imageId) return null;
+  if (imageUrls.has(imageId)) return imageUrls.get(imageId);
+  const rec = await idbGet('images', imageId);
+  if (!rec || !rec.data) return null;
+  const url = URL.createObjectURL(new Blob([rec.data], {type:rec.mime||'image/jpeg'}));
+  imageUrls.set(imageId, url);
+  return url;
 }
 function revokeImage(id){const u=imageUrls.get(id);if(u){URL.revokeObjectURL(u);imageUrls.delete(id);}}
 function revokeAllImages(){for(const u of imageUrls.values())URL.revokeObjectURL(u);imageUrls.clear();}
@@ -251,18 +161,23 @@ async function loadImageEl(el) { const id=el.dataset.imageId; if(!id)return; con
 function activateLazyImages() {
   const imgs = $$('img[data-image-id]');
   if (!('IntersectionObserver' in window)) { imgs.forEach(loadImageEl); return; }
-  const obs = new IntersectionObserver(entries => entries.forEach(e => { if(e.isIntersecting){loadImageEl(e.target);obs.unobserve(e.target);}}),{rootMargin:'160px'});
-  imgs.forEach(i=>obs.observe(i));
+  const obs = new IntersectionObserver(entries => entries.forEach(e => {
+    if (e.isIntersecting) { loadImageEl(e.target); obs.unobserve(e.target); }
+  }), {rootMargin:'160px'});
+  imgs.forEach(i => obs.observe(i));
 }
 
 function tab(id) {
-  $$('main > section').forEach(s=>s.hidden=s.id!==id); $$('nav button[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===id));
-  window.scrollTo({top:0,behavior:'auto'}); if(id==='compare')renderComparePicker();
+  $$('main > section').forEach(s=>s.hidden=s.id!==id);
+  $$('nav button[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===id));
+  window.scrollTo({top:0,behavior:'auto'});
+  if(id==='compare') renderComparePicker();
 }
 function attentionInfo(p) {
   if (p.status === '停止使用') return {level:'bad', label:'停止使用'};
   if (p.opened && Number(p.pao)) {
-    const d = new Date(`${p.opened}T12:00:00`); d.setMonth(d.getMonth()+Number(p.pao)); const days=Math.ceil((d-Date.now())/86400000);
+    const d = new Date(`${p.opened}T12:00:00`); d.setMonth(d.getMonth()+Number(p.pao));
+    const days=Math.ceil((d-Date.now())/86400000);
     if(days<0)return{level:'bad',label:`已超 PAO ${Math.abs(days)} 天`,date:d};
     if(days<=60)return{level:'warn',label:`约 ${days} 天后到 PAO`,date:d};
     return{level:'good',label:`PAO 至 ${d.toLocaleDateString()}`,date:d};
@@ -273,7 +188,8 @@ function attentionInfo(p) {
 }
 function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();}
 function renderHome(){
-  $('#count').textContent=products.length; $('#imageCount').textContent=products.filter(p=>p.imageId).length;
+  $('#count').textContent=products.length;
+  $('#imageCount').textContent=products.filter(p=>p.imageId).length;
   $('#attentionCount').textContent=products.filter(p=>attentionInfo(p).level!=='good').length;
 }
 function renderProducts(){
@@ -289,13 +205,16 @@ function renderExpiry(){
   $('#expiryList').innerHTML=sorted.map(p=>{const x=attentionInfo(p);return `<div class="expiry-row"><button type="button" data-product-id="${esc(p.id)}"><b>${esc(p.name)}</b><div class="note">${esc(p.form||'')} · 开封：${esc(p.opened||'未知')} · PAO：${esc(p.pao?`${p.pao}M`:'未知')}</div></button><span class="expiry-tag ${x.level}">${esc(x.label)}</span></div>`}).join('');
 }
 function renderComparePicker(){
-  const picker=$('#comparePicker'); if(!products.length){picker.innerHTML='<div class="note">先录入至少两件产品。</div>';$('#runCompareBtn').disabled=true;return;}
+  const picker=$('#comparePicker');
+  if(!products.length){picker.innerHTML='<div class="note">先录入至少两件产品。</div>';$('#runCompareBtn').disabled=true;return;}
   picker.innerHTML=products.map(p=>`<label class="check-card"><input type="checkbox" class="compare-check" value="${esc(p.id)}"><span><b>${esc(p.name)}</b><span class="note">${esc(p.cat||'')} · ${esc(p.shade||'')}</span></span></label>`).join('');
   updateCompareButton();
 }
 function updateCompareButton(){const n=$$('.compare-check:checked').length;$('#runCompareBtn').disabled=n<2||n>4;}
 function relationLabel(a,b){
-  const cat=(a.cat||'').toLowerCase()===(b.cat||'').toLowerCase(); const form=(a.form||'').toLowerCase()===(b.form||'').toLowerCase(); const shade=(a.shade||'').trim().toLowerCase()===(b.shade||'').trim().toLowerCase() && (a.shade||'').trim();
+  const cat=(a.cat||'').toLowerCase()===(b.cat||'').toLowerCase();
+  const form=(a.form||'').toLowerCase()===(b.form||'').toLowerCase();
+  const shade=(a.shade||'').trim().toLowerCase()===(b.shade||'').trim().toLowerCase() && (a.shade||'').trim();
   if(cat&&form&&shade)return['Strong overlap','同类别、同质地，而且你的颜色描述一致。'];
   if(cat&&shade)return['Color overlap','颜色描述相同，但质地不同；可能属于“颜色重复、配方不同”。'];
   if(cat&&form)return['Functional overlap','功能和质地接近；主要区别要看色号、适配说明和用途。'];
@@ -303,7 +222,9 @@ function relationLabel(a,b){
   return['Low overlap','类别不同，通常不属于真正重复。'];
 }
 function runCompare(){
-  const ids=$$('.compare-check:checked').map(x=>x.value); const ps=ids.map(id=>products.find(p=>p.id===id)).filter(Boolean); if(ps.length<2||ps.length>4)return;
+  const ids=$$('.compare-check:checked').map(x=>x.value);
+  const ps=ids.map(id=>products.find(p=>p.id===id)).filter(Boolean);
+  if(ps.length<2||ps.length>4)return;
   let html='<div class="card"><div class="title"><h3>比较结果</h3></div><div style="overflow:auto"><table class="compare"><tr><th>维度</th>'+ps.map(p=>`<th>${esc(p.name)}</th>`).join('')+'</tr>';
   const rows=[['类别','cat'],['颜色/色号','shade'],['质地','form'],['适配','fit'],['用途/搭配','role'],['状态','status']];
   rows.forEach(([label,key])=>{html+=`<tr><td>${label}</td>${ps.map(p=>`<td>${esc(p[key]||'未记录')}</td>`).join('')}</tr>`}); html+='</table></div></div>';
@@ -332,7 +253,7 @@ function productFormHTML(p=null){
     <label>图片来源</label><select name="imageSource"><option value="my_photo" ${x.imageSource==='my_photo'?'selected':''}>我的实物图</option><option value="official_local" ${x.imageSource==='official_local'?'selected':''}>官方产品图（已保存到本机）</option><option value="other" ${x.imageSource==='other'?'selected':''}>其他本地图</option></select>
     <div class="image-source">隐私模式不会主动从网上加载图片；官网图请先保存到 Photos/Files 再选择。</div>
     <label>备注</label><textarea name="notes">${esc(x.notes||'')}</textarea>
-    <button type="submit">${p?'保存修改':'加密保存到本机'}</button>
+    <button type="submit">${p?'保存修改':'保存到本机'}</button>
   </form>`;
 }
 async function openProductForm(p=null){openModal(productFormHTML(p));const img=$('#editImagePreview');if(img)await loadImageEl(img);}
@@ -352,8 +273,8 @@ async function handleProductSubmit(form){
   const p={...existing,id,name:String(fd.get('name')||'').trim(),brand:String(fd.get('brand')||'').trim(),cat:fd.get('cat'),shade:String(fd.get('shade')||'').trim(),form:fd.get('form'),fit:String(fd.get('fit')||'').trim(),role:String(fd.get('role')||'').trim(),made:fd.get('made'),bought:fd.get('bought'),opened:fd.get('opened'),pao:String(fd.get('pao')||'').trim(),status:fd.get('status'),imageSource:fd.get('imageSource'),notes:String(fd.get('notes')||'').trim()};
   const file=fd.get('image');
   try{
-    if(file&&file.size){toast('正在本地压缩并加密图片…');p.imageId=await storeImage(id,file,p.imageSource,existing.imageId||'');}
-    await saveEncryptedProduct(p);await reloadProducts();renderAll();closeModal();toast('已加密保存');
+    if(file&&file.size){toast('正在本地压缩图片…');p.imageId=await storeImage(id,file,p.imageSource,existing.imageId||'');}
+    await saveProduct(p);await reloadProducts();renderAll();closeModal();toast('已保存在本机');
   }catch(e){console.error(e);toast('保存失败，请检查图片或存储空间');}
 }
 async function deleteProduct(id){
@@ -361,96 +282,149 @@ async function deleteProduct(id){
   if(p.imageId){await idbDelete('images',p.imageId);revokeImage(p.imageId);}await idbDelete('products',id);await reloadProducts();renderAll();closeModal();toast('已删除');
 }
 
-async function exportBackup(){
-  const meta=await idbGet('meta','vault');const prods=await idbGetAll('products');const imgs=await idbGetAll('images');
-  const pack={format:'beauty-cabinet-encrypted-backup',version:1,exportedAt:new Date().toISOString(),meta,products:prods.map(r=>({...r,cipher:bytesToB64(r.cipher)})),images:imgs.map(r=>({...r,cipher:bytesToB64(r.cipher)}))};
-  const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});const file=new File([blob],`BeautyCabinet-${new Date().toISOString().slice(0,10)}.beautybackup`,{type:'application/json'});
-  try{
-    if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Beauty Cabinet encrypted backup'});return;}
-  }catch(e){if(e&&e.name==='AbortError')return;}
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=file.name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1200);
+async function deriveBackupKey(password, saltBytes, iterations=BACKUP_KDF_ITERATIONS) {
+  const material = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {name:'PBKDF2', salt:saltBytes, iterations, hash:'SHA-256'},
+    material,
+    {name:'AES-GCM', length:256},
+    false,
+    ['encrypt','decrypt']
+  );
 }
-async function parseBackupFile(file){
-  const text=await file.text();const pack=JSON.parse(text);
-  if(pack.format!=='beauty-cabinet-encrypted-backup'||pack.version!==1||!pack.meta||!Array.isArray(pack.products)||!Array.isArray(pack.images))throw new Error('invalid backup');
+async function buildBackupPayload() {
+  const prods = await idbGetAll('products');
+  const imgs = await idbGetAll('images');
+  const settings = await idbGetAll('settings');
+  return {
+    format:'beauty-cabinet-local-payload', version:2, appVersion:APP_VERSION,
+    exportedAt:new Date().toISOString(), products:prods,
+    images:imgs.map(r=>({...r,data:bytesToB64(r.data)})), settings
+  };
+}
+async function encryptBackupPayload(payload, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveBackupKey(password, salt);
+  const plain = enc.encode(JSON.stringify(payload));
+  const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, plain);
+  return {
+    format:'beauty-cabinet-encrypted-backup', version:2, appVersion:APP_VERSION,
+    kdf:{name:'PBKDF2-HMAC-SHA-256',iterations:BACKUP_KDF_ITERATIONS,salt:bytesToB64(salt)},
+    cipher:{name:'AES-256-GCM',iv:bytesToB64(iv),data:bytesToB64(cipher)}
+  };
+}
+async function decryptBackupPack(pack, password) {
+  if(pack?.format!=='beauty-cabinet-encrypted-backup'||pack?.version!==2||!pack.kdf||!pack.cipher) throw new Error('invalid backup');
+  const key = await deriveBackupKey(password, b64ToBytes(pack.kdf.salt), Number(pack.kdf.iterations)||BACKUP_KDF_ITERATIONS);
+  const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(pack.cipher.iv)},key,b64ToBytes(pack.cipher.data));
+  const payload = JSON.parse(dec.decode(plain));
+  if(payload?.format!=='beauty-cabinet-local-payload'||payload?.version!==2||!Array.isArray(payload.products)||!Array.isArray(payload.images)) throw new Error('invalid payload');
+  return payload;
+}
+function askNewBackupPassword() {
+  const p1 = prompt('为这份迁移备份设置一个密码。\n这个密码只在导入备份时使用，日常打开 Beauty Cabinet 不需要密码。');
+  if (p1 === null) return null;
+  if (p1.length < 6) { alert('备份密码至少 6 个字符。'); return null; }
+  const p2 = prompt('再次输入相同的备份密码：');
+  if (p2 === null) return null;
+  if (p1 !== p2) { alert('两次备份密码不一致。'); return null; }
+  return p1;
+}
+async function exportBackup(){
+  if(!window.crypto?.subtle){alert('当前浏览器不支持加密备份。');return;}
+  const password = askNewBackupPassword(); if(!password)return;
+  try{
+    toast('正在生成加密备份…');
+    const payload = await buildBackupPayload();
+    const pack = await encryptBackupPayload(payload,password);
+    const blob = new Blob([JSON.stringify(pack)],{type:'application/json'});
+    const file = new File([blob],`BeautyCabinet-${new Date().toISOString().slice(0,10)}.beautybackup`,{type:'application/json'});
+    try{
+      if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Beauty Cabinet encrypted backup'});toast('加密备份已生成');return;}
+    }catch(e){if(e&&e.name==='AbortError')return;}
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=file.name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);
+    toast('加密备份已生成');
+  }catch(e){console.error(e);alert('生成备份失败。请确认浏览器支持 Web Crypto，并检查存储空间。');}
+}
+async function parseEncryptedBackupFile(file){
+  const text=await file.text(); const pack=JSON.parse(text);
+  if(pack?.format!=='beauty-cabinet-encrypted-backup'||pack?.version!==2) throw new Error('invalid backup');
   return pack;
 }
-async function replaceWithBackup(pack){
-  await idbClear('products');await idbClear('images');await idbClear('meta');
-  await idbPut('meta',pack.meta);
-  for(const r of pack.products)await idbPut('products',{...r,cipher:b64ToBytes(r.cipher).buffer});
-  for(const r of pack.images)await idbPut('images',{...r,cipher:b64ToBytes(r.cipher).buffer});
+async function replaceWithPayload(payload){
+  revokeAllImages();
+  await idbClear('products'); await idbClear('images'); await idbClear('settings');
+  for(const p of payload.products) await idbPut('products',p);
+  for(const r of payload.images) await idbPut('images',{...r,data:b64ToBytes(r.data).buffer});
+  for(const s of (payload.settings||[])) await idbPut('settings',s);
+  await reloadProducts(); renderAll();
 }
 async function importEncryptedBackup(file){
-  try{const pack=await parseBackupFile(file);if(!confirm('导入会替换这台设备当前的 Beauty Cabinet 数据。继续？'))return;await replaceWithBackup(pack);toast('备份已导入，请用该备份的 Master Password 解锁');setTimeout(()=>location.reload(),900);}catch(e){console.error(e);alert('这不是有效的 Beauty Cabinet 加密备份。');}
-}
-async function importEncryptedBackupNewDevice(file){
-  try{const pack=await parseBackupFile(file);await replaceWithBackup(pack);toast('备份已恢复');setTimeout(()=>location.reload(),700);}catch(e){console.error(e);setAuthError('无法读取这个加密备份。');}
+  try{
+    const pack=await parseEncryptedBackupFile(file);
+    const password=prompt('请输入创建这份 .beautybackup 时设置的备份密码：');
+    if(password===null)return;
+    const payload=await decryptBackupPack(pack,password);
+    if(!confirm(`备份中有 ${payload.products.length} 件产品。导入会替换这台设备当前的 Beauty Cabinet 数据。继续？`))return;
+    await replaceWithPayload(payload); toast('备份恢复成功');
+  }catch(e){console.error(e);alert('无法解密备份：密码不正确，或文件已损坏/不是 V1.5 加密备份。');}
 }
 async function importLegacy(file){
   try{
-    const data=JSON.parse(await file.text());if(!Array.isArray(data.products))throw new Error('invalid');
-    if(!confirm(`找到 ${data.products.length} 条 V1.2 产品记录。导入后会在本机重新加密，继续？`))return;
-    for(const old of data.products){const p={id:uuid(),name:old.name||'未命名产品',brand:old.brand||'',cat:old.cat||'Other',shade:old.shade||'',form:old.form||'Other',fit:old.fit||'',role:old.role||'',made:old.made||'',bought:old.bought||'',opened:old.opened||'',pao:old.pao||'',status:old.status||'需检查',notes:old.notes||'从 V1.2 导入',imageSource:'',imageId:'',createdAt:new Date().toISOString()};await saveEncryptedProduct(p);}
-    await reloadProducts();renderAll();toast('V1.2 数据已重新加密导入');
+    const data=JSON.parse(await file.text()); if(!Array.isArray(data.products))throw new Error('invalid');
+    if(!confirm(`找到 ${data.products.length} 条 V1.2 产品记录。导入到当前本地数据库？`))return;
+    for(const old of data.products){
+      const p={id:uuid(),name:old.name||'未命名产品',brand:old.brand||'',cat:old.cat||'Other',shade:old.shade||'',form:old.form||'Other',fit:old.fit||'',role:old.role||'',made:old.made||'',bought:old.bought||'',opened:old.opened||'',pao:old.pao||'',status:old.status||'需检查',notes:old.notes||'从 V1.2 导入',imageSource:'',imageId:'',createdAt:new Date().toISOString()};
+      await saveProduct(p);
+    }
+    await reloadProducts(); renderAll(); toast('V1.2 数据已导入');
   }catch(e){console.error(e);alert('无法读取这个 V1.2 JSON 备份。');}
 }
 async function clearAllData(){
-  if(!confirm('这会永久删除这台设备上的 Beauty Cabinet 数据。请先确认已经导出加密备份。继续？'))return;
+  if(!confirm('这会永久删除这台设备上的 Beauty Cabinet 数据。建议先导出加密备份。继续？'))return;
   if(!confirm('最后确认：删除后无法撤销。'))return;
-  try {
-    currentKey=null; products=[]; revokeAllImages();
-    await idbClear('products'); await idbClear('images'); await idbClear('meta');
-    $('#app').hidden=true; $('#authScreen').hidden=false;
-    await initializeAuth();
-    toast('本机数据已删除');
-  } catch(e) { console.error(e); alert('删除失败，请关闭其他页面后重试。'); }
+  try{
+    products=[];revokeAllImages();await idbClear('products');await idbClear('images');await idbClear('settings');renderAll();toast('本机数据已删除');
+  }catch(e){console.error(e);alert('删除失败，请关闭其他 Beauty Cabinet 页面后重试。');}
 }
 
-async function resetVaultFromLockScreen(){
-  setAuthError();
-  if(!confirm('这会清空这台设备上的 Beauty Cabinet 本地数据，并重新创建密码。若已有正式数据，请先导出加密备份。继续？')) return;
-  if(!confirm('最后确认：本机现有 Beauty Cabinet 数据将被永久删除。')) return;
-  try {
-    currentKey = null; products = []; revokeAllImages();
-    await idbClear('products');
-    await idbClear('images');
-    await idbClear('meta');
-    $('#unlockPassword').value='';
-    $('#newPassword').value='';
-    $('#confirmPassword').value='';
-    await initializeAuth();
-    toast('本机柜子已清空，请创建新密码');
-  } catch(e) {
-    console.error(e);
-    setAuthError('重置失败。请关闭其他打开的 Beauty Cabinet 页面，再刷新重试。');
-  }
-}
 function bindEvents(){
-  $('#createVaultBtn').addEventListener('click',createVault);$('#unlockBtn').addEventListener('click',unlockVault);$('#resetVaultBtn').addEventListener('click',resetVaultFromLockScreen);$('#lockBtn').addEventListener('click',lockApp);
-  $('#unlockPassword').addEventListener('keydown',e=>{if(e.key==='Enter')unlockVault();});$('#confirmPassword').addEventListener('keydown',e=>{if(e.key==='Enter')createVault();});
-  $('#homeAddBtn').addEventListener('click',()=>openProductForm());$('#addBtn').addEventListener('click',()=>openProductForm());$('#closeModalBtn').addEventListener('click',closeModal);
-  $('#exportBtn').addEventListener('click',exportBackup);$('#homeBackupBtn').addEventListener('click',exportBackup);$('#settingsExportBtn').addEventListener('click',exportBackup);
-  $('#importBtn').addEventListener('click',()=>$('#importFile').click());$('#importFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importEncryptedBackup(f);e.target.value='';});
-  $('#legacyImportBtn').addEventListener('click',()=>$('#legacyImportFile').click());$('#legacyImportFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importLegacy(f);e.target.value='';});
-  $('#importLockedBtn').addEventListener('click',()=>$('#importLockedFile').click());$('#importLockedFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importEncryptedBackupNewDevice(f);e.target.value='';});
-  $('#importNewDeviceBtn').addEventListener('click',()=>$('#importNewDeviceFile').click());$('#importNewDeviceFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importEncryptedBackupNewDevice(f);e.target.value='';});
-  $('#clearBtn').addEventListener('click',clearAllData);$('#runCompareBtn').addEventListener('click',runCompare);
+  $('#homeAddBtn').addEventListener('click',()=>openProductForm());
+  $('#addBtn').addEventListener('click',()=>openProductForm());
+  $('#closeModalBtn').addEventListener('click',closeModal);
+  $('#exportBtn').addEventListener('click',exportBackup);
+  $('#homeBackupBtn').addEventListener('click',exportBackup);
+  $('#settingsExportBtn').addEventListener('click',exportBackup);
+  $('#importBtn').addEventListener('click',()=>$('#importFile').click());
+  $('#importFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importEncryptedBackup(f);e.target.value='';});
+  $('#legacyImportBtn').addEventListener('click',()=>$('#legacyImportFile').click());
+  $('#legacyImportFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importLegacy(f);e.target.value='';});
+  $('#clearBtn').addEventListener('click',clearAllData);
+  $('#runCompareBtn').addEventListener('click',runCompare);
   document.addEventListener('click',e=>{
-    lastActivity=Date.now();const t=e.target.closest('button[data-tab]');if(t){tab(t.dataset.tab);return;}const p=e.target.closest('[data-product-id]');if(p&&!p.closest('#productForm')){showProduct(p.dataset.productId);return;}const a=e.target.closest('[data-action]');if(a){const id=a.dataset.id;if(a.dataset.action==='edit')openProductForm(products.find(x=>x.id===id));if(a.dataset.action==='delete')deleteProduct(id);return;}if(e.target===$('#modal'))closeModal();
+    const t=e.target.closest('button[data-tab]');if(t){tab(t.dataset.tab);return;}
+    const p=e.target.closest('[data-product-id]');if(p&&!p.closest('#productForm')){showProduct(p.dataset.productId);return;}
+    const a=e.target.closest('[data-action]');if(a){const id=a.dataset.id;if(a.dataset.action==='edit')openProductForm(products.find(x=>x.id===id));if(a.dataset.action==='delete')deleteProduct(id);return;}
+    if(e.target===$('#modal'))closeModal();
   });
-  document.addEventListener('change',e=>{lastActivity=Date.now();if(e.target.classList.contains('compare-check'))updateCompareButton();});
+  document.addEventListener('change',e=>{if(e.target.classList.contains('compare-check'))updateCompareButton();});
   document.addEventListener('submit',e=>{if(e.target.id==='productForm'){e.preventDefault();handleProductSubmit(e.target);}});
-  ['pointerdown','keydown','touchstart'].forEach(ev=>document.addEventListener(ev,()=>{lastActivity=Date.now();},{passive:true}));
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){hiddenAt=Date.now();}else if(hiddenAt&&currentKey&&Date.now()-hiddenAt>BACKGROUND_LOCK_MS){lockApp();hiddenAt=0;}});
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
-  setInterval(()=>{if(currentKey&&Date.now()-lastActivity>AUTO_LOCK_MS)lockApp();},60000);
 }
 
 async function start(){
-  $('#runtimeVersion').textContent='V1.4.0';
-  if(!window.crypto?.subtle||!window.indexedDB){document.body.innerHTML='<main><div class="card"><b>当前浏览器不支持所需的本地加密功能。</b><p>请使用较新的 Safari / Chrome / Edge。</p></div></main>';return;}
-  try{await cleanupLegacyWebState();db=await openDB();bindEvents();await initializeAuth();}catch(e){console.error(e);setAuthError('无法打开本地数据库。请检查 Safari 是否处于可用的正常浏览模式。');}
+  if(!window.indexedDB){document.body.innerHTML='<main><div class="card"><b>当前浏览器不支持 IndexedDB。</b><p>请使用较新的 Safari / Chrome / Edge。</p></div></main>';return;}
+  try{
+    await cleanupLegacyWebState();
+    db=await openDB();
+    bindEvents();
+    try{if(navigator.storage?.persist) await navigator.storage.persist();}catch(e){}
+    await reloadProducts(); renderAll();
+  }catch(e){
+    console.error(e);
+    document.body.innerHTML='<main><div class="card"><b>无法打开本地数据库。</b><p>请使用 Safari/Chrome/Edge 的正常浏览模式，并确认没有禁用网站数据。</p></div></main>';
+  }
 }
 
 document.addEventListener('DOMContentLoaded',start);
