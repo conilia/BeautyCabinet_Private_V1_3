@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.3';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -10,14 +10,14 @@ const MAX_IMAGE_DIM = 1100;
 const MAX_SCAN_IMAGE_DIM = 1800;
 const MAX_SCAN_PHOTOS = 5;
 const IMAGE_QUALITY = 0.82;
-const AI_PROXY_ENDPOINT = (() => {
-  const raw = document.querySelector('meta[name="beauty-ai-endpoint"]')?.content?.trim();
-  if (!raw) return '';
-  try {
-    const url = new URL(raw, location.href);
-    return url.origin === location.origin ? url.href : '';
-  } catch (e) { return ''; }
-})();
+const DEFAULT_AI_PROXY_ENDPOINT = document.querySelector('meta[name="beauty-ai-endpoint"]')?.content?.trim() || '';
+let aiProxyEndpoint = '';
+function normalizeAiEndpoint(raw=''){
+  const value=String(raw||'').trim();if(!value)return '';
+  try{const url=new URL(value,location.href),localDev=['localhost','127.0.0.1'].includes(url.hostname),sameOrigin=url.origin===location.origin,worker=url.hostname.endsWith('.workers.dev');return (sameOrigin||worker||localDev)&&(url.protocol==='https:'||localDev)?url.href:'';}catch(e){return '';}
+}
+async function loadAiEndpoint(){const rec=await idbGet('settings','aiEndpoint');aiProxyEndpoint=normalizeAiEndpoint(rec?.value||DEFAULT_AI_PROXY_ENDPOINT);}
+async function saveAiEndpoint(value){const normalized=normalizeAiEndpoint(value);if(value&& !normalized)throw new Error('AI endpoint must be same-origin, localhost, or an HTTPS *.workers.dev URL.');await idbPut('settings',{key:'aiEndpoint',value:normalized});aiProxyEndpoint=normalized;return normalized;}
 
 let db = null;
 let products = [];
@@ -259,24 +259,73 @@ function combineEvidence(sourceImages=[]){
   const pick=key=>{const counts=new Map();for(const e of list){if(e[key])counts.set(e[key],(counts.get(e[key])||0)+1);}return [...counts.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]||'';};
   return {hue:pick('hue'),undertone:pick('undertone'),saturation:pick('saturation'),depth:pick('depth'),dominantColors:list.map(e=>e.dominantColor).filter(Boolean),evidenceCount:list.length};
 }
+function rectIoU(a,b){
+  const x1=Math.max(a.x1,b.x1),y1=Math.max(a.y1,b.y1),x2=Math.min(a.x2,b.x2),y2=Math.min(a.y2,b.y2),iw=Math.max(0,x2-x1),ih=Math.max(0,y2-y1),inter=iw*ih;
+  if(!inter)return 0;const aa=(a.x2-a.x1)*(a.y2-a.y1),ba=(b.x2-b.x1)*(b.y2-b.y1);return inter/Math.max(1,aa+ba-inter);
+}
+function rectContainment(inner,outer){
+  const x1=Math.max(inner.x1,outer.x1),y1=Math.max(inner.y1,outer.y1),x2=Math.min(inner.x2,outer.x2),y2=Math.min(inner.y2,outer.y2),inter=Math.max(0,x2-x1)*Math.max(0,y2-y1),area=Math.max(1,(inner.x2-inner.x1)*(inner.y2-inner.y1));return inter/area;
+}
+function medianNumber(values){if(!values.length)return 0;const a=[...values].sort((x,y)=>x-y),m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;}
 async function proposeRegions(imageId){
   const rec=await storedImageRecord(imageId),img=await blobToImage(new Blob([rec.data],{type:rec.mime||'image/jpeg'}));
-  const scale=Math.min(1,360/img.naturalWidth,300/img.naturalHeight),w=Math.max(48,Math.round(img.naturalWidth*scale)),h=Math.max(48,Math.round(img.naturalHeight*scale)),canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
-  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,w,h);const px=ctx.getImageData(0,0,w,h).data,cornerSize=Math.max(5,Math.round(Math.min(w,h)*.025));
-  const corner=(x0,y0)=>{let r=0,g=0,b=0,n=0;for(let y=y0;y<Math.min(h,y0+cornerSize);y++)for(let x=x0;x<Math.min(w,x0+cornerSize);x++){const i=(y*w+x)*4;r+=px[i];g+=px[i+1];b+=px[i+2];n++;}return[r/n,g/n,b/n];};
-  const cs=[corner(0,0),corner(Math.max(0,w-cornerSize),0),corner(0,Math.max(0,h-cornerSize)),corner(Math.max(0,w-cornerSize),Math.max(0,h-cornerSize))],bg=[0,1,2].map(k=>cs.reduce((s,c)=>s+c[k],0)/cs.length);
-  const cell=Math.max(3,Math.round(Math.min(w,h)/70)),cols=Math.ceil(w/cell),rows=Math.ceil(h/cell),mask=new Uint8Array(cols*rows);
-  for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++){let active=0,total=0;for(let y=gy*cell;y<Math.min(h,(gy+1)*cell);y++)for(let x=gx*cell;x<Math.min(w,(gx+1)*cell);x++){const i=(y*w+x)*4,d=Math.abs(px[i]-bg[0])+Math.abs(px[i+1]-bg[1])+Math.abs(px[i+2]-bg[2]);if(d>90)active++;total++;}if(active/Math.max(1,total)>.16)mask[gy*cols+gx]=1;}
-  const joined=mask.slice();for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++)if(mask[gy*cols+gx])for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=gx+dx,ny=gy+dy;if(nx>=0&&nx<cols&&ny>=0&&ny<rows)joined[ny*cols+nx]=1;}
-  const seen=new Uint8Array(joined.length),components=[];
-  for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++){const start=gy*cols+gx;if(!joined[start]||seen[start])continue;const queue=[start];seen[start]=1;let qi=0,minX=gx,maxX=gx,minY=gy,maxY=gy,cells=0;while(qi<queue.length){const pos=queue[qi++],cx=pos%cols,cy=Math.floor(pos/cols);cells++;minX=Math.min(minX,cx);maxX=Math.max(maxX,cx);minY=Math.min(minY,cy);maxY=Math.max(maxY,cy);for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=cx+dx,ny=cy+dy,ni=ny*cols+nx;if(nx>=0&&nx<cols&&ny>=0&&ny<rows&&joined[ni]&&!seen[ni]){seen[ni]=1;queue.push(ni);}}}const x1=minX*cell,y1=minY*cell,x2=Math.min(w,(maxX+1)*cell),y2=Math.min(h,(maxY+1)*cell),boxArea=(x2-x1)*(y2-y1),density=cells/Math.max(1,(maxX-minX+1)*(maxY-minY+1));if(x2-x1>=w*.025&&y2-y1>=h*.045&&boxArea>=w*h*.003)components.push({x1,y1,x2,y2,density,boxArea});}
-  const selected=components.sort((a,b)=>b.boxArea-a.boxArea).slice(0,20).sort((a,b)=>Math.abs(a.y1-b.y1)>h*.12?a.y1-b.y1:a.x1-b.x1);
-  if(!selected.length)return[{crop:{x:0,y:0,width:100,height:100},detectionConfidence:.18,needsAdjustment:true}];
-  return selected.map(c=>{const padX=Math.max(2,(c.x2-c.x1)*.06),padY=Math.max(2,(c.y2-c.y1)*.06),areaScore=Math.min(1,c.boxArea/(w*h*.08));return{crop:safeCrop({x:(c.x1-padX)/w*100,y:(c.y1-padY)/h*100,width:(c.x2-c.x1+2*padX)/w*100,height:(c.y2-c.y1+2*padY)/h*100}),detectionConfidence:Math.min(.88,.28+c.density*.38+areaScore*.2),needsAdjustment:c.density<.22};});
+  const scale=Math.min(1,640/img.naturalWidth,520/img.naturalHeight),w=Math.max(96,Math.round(img.naturalWidth*scale)),h=Math.max(96,Math.round(img.naturalHeight*scale)),canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,w,h);const px=ctx.getImageData(0,0,w,h).data;
+  const border=[],stride=Math.max(2,Math.round(Math.min(w,h)/120));
+  const pushPixel=(x,y)=>{const i=(y*w+x)*4;border.push([px[i],px[i+1],px[i+2]]);};
+  for(let x=0;x<w;x+=stride){pushPixel(x,0);pushPixel(x,h-1);}for(let y=stride;y<h-stride;y+=stride){pushPixel(0,y);pushPixel(w-1,y);}
+  const bg=[0,1,2].map(k=>medianNumber(border.map(c=>c[k]))),borderDist=border.map(c=>Math.abs(c[0]-bg[0])+Math.abs(c[1]-bg[1])+Math.abs(c[2]-bg[2])),noise=medianNumber(borderDist),baseThreshold=Math.max(42,Math.min(150,noise*3.2+34));
+  const cell=Math.max(3,Math.min(8,Math.round(Math.min(w,h)/105))),cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
+  const buildMask=(ratioThreshold=0.12,colorFactor=1)=>{
+    const mask=new Uint8Array(cols*rows);const threshold=baseThreshold*colorFactor;
+    for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++){
+      let active=0,total=0,edgeHits=0;const x0=gx*cell,y0=gy*cell;
+      for(let y=y0;y<Math.min(h,y0+cell);y++)for(let x=x0;x<Math.min(w,x0+cell);x++){
+        const i=(y*w+x)*4,d=Math.abs(px[i]-bg[0])+Math.abs(px[i+1]-bg[1])+Math.abs(px[i+2]-bg[2]);
+        let edge=0;if(x+1<w){const j=i+4;edge+=Math.abs(px[i]-px[j])+Math.abs(px[i+1]-px[j+1])+Math.abs(px[i+2]-px[j+2]);}if(y+1<h){const j=i+w*4;edge+=Math.abs(px[i]-px[j])+Math.abs(px[i+1]-px[j+1])+Math.abs(px[i+2]-px[j+2]);}
+        if(d>threshold||(d>threshold*.5&&edge>115))active++;if(edge>160)edgeHits++;total++;
+      }
+      if(active/Math.max(1,total)>ratioThreshold||edgeHits/Math.max(1,total)>.42)mask[gy*cols+gx]=1;
+    }
+    // Remove isolated noise without dilating across the gaps between products.
+    const clean=mask.slice();for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++)if(mask[gy*cols+gx]){let n=0;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=gx+dx,ny=gy+dy;if(nx>=0&&nx<cols&&ny>=0&&ny<rows&&mask[ny*cols+nx])n++;}if(n<=1)clean[gy*cols+gx]=0;}
+    // Fill small internal holes only; do not perform a blanket dilation.
+    const filled=clean.slice();for(let gy=1;gy<rows-1;gy++)for(let gx=1;gx<cols-1;gx++)if(!clean[gy*cols+gx]){let n=0;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++)if(dx||dy)n+=clean[(gy+dy)*cols+gx+dx];if(n>=6)filled[gy*cols+gx]=1;}
+    return filled;
+  };
+  const maskCount=(mask,box)=>{let n=0;for(let y=box.y1;y<box.y2;y++)for(let x=box.x1;x<box.x2;x++)n+=mask[y*cols+x];return n;};
+  const trim=(mask,box)=>{let x1=box.x2,y1=box.y2,x2=box.x1,y2=box.y1,found=false;for(let y=box.y1;y<box.y2;y++)for(let x=box.x1;x<box.x2;x++)if(mask[y*cols+x]){found=true;x1=Math.min(x1,x);y1=Math.min(y1,y);x2=Math.max(x2,x+1);y2=Math.max(y2,y+1);}return found?{x1,y1,x2,y2}:null;};
+  const splitCandidate=(mask,box,axis,aggressive)=>{
+    const span=axis==='x'?box.x2-box.x1:box.y2-box.y1,cross=axis==='x'?box.y2-box.y1:box.x2-box.x1;if(span<7||cross<3)return null;const vals=[];
+    for(let i=0;i<span;i++){let n=0;if(axis==='x'){const x=box.x1+i;for(let y=box.y1;y<box.y2;y++)n+=mask[y*cols+x];}else{const y=box.y1+i;for(let x=box.x1;x<box.x2;x++)n+=mask[y*cols+x];}vals.push(n);}
+    const occupied=vals.filter(v=>v>0),avg=occupied.length?occupied.reduce((a,b)=>a+b,0)/occupied.length:0;if(!avg)return null;const edge=Math.max(2,Math.floor(span*.12)),limit=avg*(aggressive?.38:.24);let best=null,runStart=-1;
+    const consider=(a,b)=>{if(a<edge||b>span-edge)return;const len=b-a;if(len<1)return;const mean=vals.slice(a,b).reduce((s,v)=>s+v,0)/len,score=(1-mean/Math.max(1,avg))*Math.min(3,len);if(!best||score>best.score)best={a,b,score,mean};};
+    for(let i=0;i<span;i++){if(vals[i]<=limit){if(runStart<0)runStart=i;}else if(runStart>=0){consider(runStart,i);runStart=-1;}}if(runStart>=0)consider(runStart,span);
+    if(!best&&aggressive){let min=Infinity,idx=-1;for(let i=edge;i<span-edge;i++){if(vals[i]<min){min=vals[i];idx=i;}}if(idx>=0&&min<avg*.5)best={a:idx,b:idx+1,score:1-min/avg,mean:min};}
+    if(!best||best.score<(aggressive?.42:.7))return null;const cut=Math.floor((best.a+best.b)/2);if(cut<edge||span-cut<edge)return null;return axis==='x'?{a:{...box,x2:box.x1+cut},b:{...box,x1:box.x1+cut},score:best.score}:{a:{...box,y2:box.y1+cut},b:{...box,y1:box.y1+cut},score:best.score};
+  };
+  const partition=(mask,box,depth=0,aggressive=false)=>{
+    const t=trim(mask,box);if(!t)return[];const fw=t.x2-t.x1,fh=t.y2-t.y1,fg=maskCount(mask,t),area=fw*fh;if(fw<2||fh<2||fg<2)return[];
+    if(depth<5&&area>18){const options=[splitCandidate(mask,t,'x',aggressive),splitCandidate(mask,t,'y',aggressive)].filter(Boolean).sort((a,b)=>b.score-a.score);if(options.length){const sp=options[0],left=trim(mask,sp.a),right=trim(mask,sp.b);if(left&&right){const lf=maskCount(mask,left),rf=maskCount(mask,right);if(lf>=2&&rf>=2)return[...partition(mask,left,depth+1,aggressive),...partition(mask,right,depth+1,aggressive)];}}}
+    return[{...t,fg,fill:fg/area}];
+  };
+  const connected=(mask,aggressive=false)=>{
+    const seen=new Uint8Array(mask.length),out=[];for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++){const start=gy*cols+gx;if(!mask[start]||seen[start])continue;const q=[start];seen[start]=1;let qi=0,minX=gx,maxX=gx,minY=gy,maxY=gy,cells=0;while(qi<q.length){const pos=q[qi++],cx=pos%cols,cy=Math.floor(pos/cols);cells++;minX=Math.min(minX,cx);maxX=Math.max(maxX,cx);minY=Math.min(minY,cy);maxY=Math.max(maxY,cy);for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=cx+dx,ny=cy+dy;if(nx<0||nx>=cols||ny<0||ny>=rows)continue;const ni=ny*cols+nx;if(mask[ni]&&!seen[ni]){seen[ni]=1;q.push(ni);}}}const box={x1:minX,y1:minY,x2:maxX+1,y2:maxY+1};if(cells>=2)out.push(...partition(mask,box,0,aggressive));}return out;
+  };
+  const finalize=(mask,aggressive=false)=>{
+    const boxes=connected(mask,aggressive),global=partition(mask,{x1:0,y1:0,x2:cols,y2:rows},0,aggressive);for(const b of global)boxes.push(b);
+    const normalized=boxes.map(b=>{const x1=b.x1*cell,y1=b.y1*cell,x2=Math.min(w,b.x2*cell),y2=Math.min(h,b.y2*cell),boxArea=(x2-x1)*(y2-y1),fg=b.fg??maskCount(mask,b),fill=b.fill??fg/Math.max(1,(b.x2-b.x1)*(b.y2-b.y1));return{x1,y1,x2,y2,boxArea,fill};}).filter(b=>b.x2-b.x1>=w*.025&&b.y2-b.y1>=h*.035&&b.boxArea>=w*h*.0018&&b.boxArea<=w*h*.82);
+    normalized.sort((a,b)=>a.boxArea-b.boxArea);const kept=[];for(const box of normalized){if(kept.some(k=>rectIoU(box,k)>.62||rectContainment(box,k)>.88))continue;kept.push(box);}const withoutContainers=kept.filter(box=>!kept.some(other=>other!==box&&other.boxArea<box.boxArea*.6&&rectContainment(other,box)>.92));
+    return withoutContainers.sort((a,b)=>Math.abs(a.y1-b.y1)>h*.1?a.y1-b.y1:a.x1-b.x1).slice(0,30);
+  };
+  const standardMask=buildMask(.12,1),standard=finalize(standardMask,false);let selected=standard;
+  if(standard.length<=2){const aggressiveMask=buildMask(.075,.82),aggressive=finalize(aggressiveMask,true);if(aggressive.length>standard.length&&aggressive.length<=24)selected=aggressive;}
+  if(!selected.length)return[{crop:{x:0,y:0,width:100,height:100},detectionConfidence:.16,needsAdjustment:true,detector:'fallback-whole-image'}];
+  return selected.map(c=>{const padX=Math.max(2,(c.x2-c.x1)*.045),padY=Math.max(2,(c.y2-c.y1)*.045),areaScore=Math.min(1,c.boxArea/(w*h*.055)),separationScore=Math.min(1,selected.length/8),confidence=Math.min(.93,.38+c.fill*.22+areaScore*.2+separationScore*.12);return{crop:safeCrop({x:(c.x1-padX)/w*100,y:(c.y1-padY)/h*100,width:(c.x2-c.x1+2*padX)/w*100,height:(c.y2-c.y1+2*padY)/h*100}),detectionConfidence:confidence,needsAdjustment:confidence<.5,detector:selected===standard?'adaptive-local':'adaptive-local-aggressive'};});
 }
 async function createRegions(sessionId,imageId,role){
   const proposals=await proposeRegions(imageId),regions=[];let index=0;
-  for(const proposal of proposals){const crop=proposal.crop,evidence=await analyzeStoredRegion(imageId,crop),cropImageId=await storeCropImage(sessionId,imageId,crop);regions.push({id:uuid(),label:String.fromCharCode(65+index++),sourceImageId:imageId,role,crop,cropImageId,evidence,detectionConfidence:proposal.detectionConfidence,needsAdjustment:proposal.needsAdjustment,centerX:crop.x+crop.width/2,centerY:crop.y+crop.height/2});}
+  for(const proposal of proposals){const crop=proposal.crop,evidence=await analyzeStoredRegion(imageId,crop),cropImageId=await storeCropImage(sessionId,imageId,crop);regions.push({id:uuid(),label:String.fromCharCode(65+index++),sourceImageId:imageId,role,crop,cropImageId,evidence,detectionConfidence:proposal.detectionConfidence,needsAdjustment:proposal.needsAdjustment,detector:proposal.detector||'local',centerX:crop.x+crop.width/2,centerY:crop.y+crop.height/2});}
   return regions;
 }
 function colorDistance(a,b){const ar=a?.rgb||[0,0,0],br=b?.rgb||[0,0,0];return Math.sqrt(ar.reduce((s,v,i)=>s+(v-br[i])**2,0))/442;}
@@ -304,7 +353,7 @@ function attentionInfo(p) {
   if (!p.opened && p.form === 'Cream') return {level:'warn',label:'年龄未知 · 定期检查'};
   return {level:'good',label:'状态检查管理'};
 }
-function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=AI_PROXY_ENDPOINT?'OFF until per-scan consent · secure same-origin proxy configured':'OFF · secure proxy not configured';}
+function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
 function renderHome(){
   $('#count').textContent=products.length;
   $('#imageCount').textContent=new Set(products.flatMap(productImageIds)).size;
@@ -518,12 +567,12 @@ async function updateLocalProgress(session,active,status='running'){
 function detectionConfidence(candidate){const value=Number(candidate?.detectionConfidence??candidate?.confidence??.2);return Math.max(0,Math.min(1,Number.isFinite(value)?value:.2));}
 function localDetectionSummary(session,candidateCount,cropSuccess){const needsAdjustment=(session.candidates||[]).filter(c=>!c.cropImageId||detectionConfidence(c)<.45).length;return{candidateCount,cropSuccess,needsAdjustment,completedAt:new Date().toISOString()};}
 function renderLocalProgress(session){const detection=session.localDetection||{},active=Number(detection.active)||0,steps=detection.steps||LOCAL_DETECTION_STEPS;return `<div class="card processing-panel"><div class="title"><h3>Local Detection</h3><span class="status-badge">${detection.status==='error'?'CHECK':'LOCAL'}</span></div><div class="progress-track"><span style="width:${Math.min(100,Math.max(8,(active+1)/steps.length*100))}%"></span></div><div class="progress-steps">${steps.map((label,index)=>`<div class="${index<active?'done':index===active?'active':''}"><span>${index<active?'✓':index===active?'●':'○'}</span>${esc(label)}</div>`).join('')}</div>${detection.status==='error'?`<p class="error">${esc(detection.error||'Local Detection failed. You can retry or add candidates manually.')}</p>`:'<p class="note">All image processing shown here is running on this device.</p>'}</div>`;}
-function renderLocalComplete(session){const s=session.localDetection?.summary||{candidateCount:(session.candidates||[]).length,cropSuccess:(session.candidates||[]).filter(c=>c.cropImageId).length,needsAdjustment:0};return `<div class="completion-panel local-complete"><div><span class="completion-icon">✓</span><div><h3>Local detection complete</h3><p>Brand/product/shade identification has not yet been performed.</p></div></div><ul><li>${s.candidateCount} candidates found</li><li>${s.cropSuccess} crops generated successfully</li><li>${s.needsAdjustment} candidates need manual adjustment</li></ul></div>`;}
+function renderLocalComplete(session){const s=session.localDetection?.summary||{candidateCount:(session.candidates||[]).length,cropSuccess:(session.candidates||[]).filter(c=>c.cropImageId).length,needsAdjustment:0},warning=session.mode==='batch'&&s.candidateCount<=1?'<div class="detection-warning"><b>只检测到 1 个独立区域。</b> 复杂背景、相互接触或反光包装会让纯本地分割失效。可以手动添加区域；若已配置 AI proxy，AI Identification 会同时查看整张当前合照并可补回漏检产品。</div>':'';return `<div class="completion-panel local-complete"><div><span class="completion-icon">✓</span><div><h3>Local detection complete</h3><p>Brand/product/shade identification has not yet been performed.</p></div></div><ul><li>${s.candidateCount} candidates found</li><li>${s.cropSuccess} crops generated successfully</li><li>${s.needsAdjustment} candidates need manual adjustment</li></ul></div>${warning}`;}
 function renderScanCapture(session){
   const sources=session.sourceImages||[];
   const previousError=session.localDetection?.status==='error'?renderLocalProgress(session):'';
   if(session.mode==='single')return `${previousError}<div class="card"><div class="title"><h3>Single Product Multi-Photo</h3><span class="status-badge">${sources.length}/${MAX_SCAN_PHOTOS}</span></div><p class="note">一件产品可添加正面、底部、背面、侧面或开盖颜色图。所有照片属于同一个 ProductCandidate。</p><div class="scan-gallery">${sources.map(sourceThumb).join('')}</div><div class="toolbar">${scanFileControl('single-camera',sources.length?'Add another angle':'Take first photo',{capture:true})}${scanFileControl('single-files',sources.length?'Add photos':'Choose Photos',{multiple:true})}</div>${sources.length?'<button class="full" type="button" data-scan-action="local-detect">Start Local Detection</button>':''}</div>`;
-  if(session.mode==='batch')return `${previousError}<div class="card"><h3>Single-Image Batch Scan</h3><p class="note">Local Detection proposes editable regions using an on-device connected-region heuristic. It can find several separated products and may miss touching or low-contrast items; review every crop.</p>${session.batchImageId?`<img class="scan-group-preview" alt="批量合照" data-image-id="${esc(session.batchImageId)}">`:''}<div class="toolbar">${scanFileControl('batch-camera',session.batchImageId?'Retake photo':'Take group photo',{capture:true})}${scanFileControl('batch-file',session.batchImageId?'Choose another image':'Choose one image')}</div>${session.batchImageId?'<button class="full" type="button" data-scan-action="local-detect">Run Local Detection</button>':''}</div>`;
+  if(session.mode==='batch')return `${previousError}<div class="card"><h3>Single-Image Batch Scan</h3><p class="note">Local Detection proposes editable regions using an adaptive on-device foreground/whitespace detector. It can find several separated products and may miss touching or low-contrast items; review every crop.</p>${session.batchImageId?`<img class="scan-group-preview" alt="批量合照" data-image-id="${esc(session.batchImageId)}">`:''}<div class="toolbar">${scanFileControl('batch-camera',session.batchImageId?'Retake photo':'Take group photo',{capture:true})}${scanFileControl('batch-file',session.batchImageId?'Choose another image':'Choose one image')}</div>${session.batchImageId?'<button class="full" type="button" data-scan-action="local-detect">Run Local Detection</button>':''}</div>`;
   return `${previousError}<div class="card"><h3>Paired Batch Scan</h3><ol class="scan-steps"><li>保持产品顺序，拍正面合照</li><li>原位翻转产品，拍背面合照</li><li>Local Detection 建议配对，人工确认</li></ol><div class="paired-capture"><div><b>Front group</b>${session.frontImageId?`<img class="scan-group-preview" alt="正面合照" data-image-id="${esc(session.frontImageId)}">`:''}${scanFileControl('paired-front',session.frontImageId?'Retake front':'Take front group',{capture:true})}${scanFileControl('paired-front','Choose front photo')}</div><div><b>Back group</b>${session.backImageId?`<img class="scan-group-preview" alt="背面合照" data-image-id="${esc(session.backImageId)}">`:''}${scanFileControl('paired-back',session.backImageId?'Retake back':'Take back group',{capture:true})}${scanFileControl('paired-back','Choose back photo')}</div></div>${session.frontImageId&&session.backImageId?'<button class="full" type="button" data-scan-action="local-detect">Run Local Detection &amp; propose pairings</button>':''}<p class="note">通常两张合照即可。若某一件仍缺信息，只对那件产品添加底部/侧面图。</p></div>`;
 }
 function renderPairing(session){
@@ -543,22 +592,27 @@ function candidateCard(candidate){
   const aiInfo=ai?`<div class="ai-candidate-info"><b>AI Identification</b>${Number.isFinite(ai.confidence)?`<span class="identification-confidence">Identification confidence ${Math.round(ai.confidence*100)}%</span>`:''}${candidate.productLine?`<div>Product line/version: ${esc(candidate.productLine)}</div>`:''}${candidate.barcodeText?`<div>Visible barcode: ${esc(candidate.barcodeText)}</div>`:''}${candidate.batchCode?`<div>Batch/shade code: ${esc(candidate.batchCode)}</div>`:''}${candidate.packagingText?`<details><summary>Extracted packaging text</summary><p>${esc(candidate.packagingText)}</p></details>`:''}${alternatives.length?`<label>Alternative AI matches<select data-ai-alternative="${esc(candidate.id)}"><option value="">Keep current match</option>${alternatives.map((match,index)=>`<option value="${index}">${esc(alternativeLabel(match))}</option>`).join('')}</select></label>`:''}</div>`:'';
   return `<article class="candidate-card ${candidate.unidentified?'candidate-unidentified':''}" data-candidate-id="${esc(candidate.id)}" data-identification-status="${identificationStatus(candidate)}"><div class="candidate-top">${candidate.cropImageId?`<img class="candidate-crop" alt="候选裁剪" data-image-id="${esc(candidate.cropImageId)}">`:'<div class="candidate-crop placeholder">✦</div>'}<div><label class="candidate-accept"><input type="checkbox" data-candidate-accept="${esc(candidate.id)}" ${candidate.accepted?'checked':''}>接受并导入</label><b>${esc(candidate.unidentified?'未识别产品':candidate.name||'待识别产品')}</b><div class="note">${esc(candidate.brand||'品牌待填')} · ${esc(candidate.cat||'Other')} · ${esc(candidate.shade||'色号待填')}</div><span class="confidence">Detection confidence ${Math.round(detectionConfidence(candidate)*100)}%</span>${ai&&Number.isFinite(ai.confidence)?`<span class="identification-confidence">Identification confidence ${Math.round(ai.confidence*100)}%</span>`:''}</div></div>${flag?`<div class="duplicate-flag"><b>${esc(flag.label)}</b><span>${esc(flag.product.name)}</span></div>`:''}${aiInfo}${attrText?`<p class="note">${esc(attrText)}</p>`:''}<div class="candidate-actions"><button class="secondary" type="button" data-candidate-action="edit" data-id="${esc(candidate.id)}">编辑</button><button class="secondary" type="button" data-candidate-action="unidentified" data-id="${esc(candidate.id)}">标记未识别</button><label class="scan-file-button small-button">Add bottom/side photo for this product<input type="file" accept="image/*" capture="environment" data-candidate-extra="${esc(candidate.id)}"></label><button class="danger" type="button" data-candidate-action="delete" data-id="${esc(candidate.id)}">删除误检</button></div><label class="merge-check"><input type="checkbox" data-candidate-merge="${esc(candidate.id)}">选择合并</label></article>`;
 }
+function renderDetectionOverview(session){
+  if(session.mode!=='batch'||!session.batchImageId||!session.candidates?.length)return'';
+  const boxes=session.candidates.map((candidate,index)=>{const source=(candidate.sourceImages||[]).find(s=>s.imageId===session.batchImageId)||candidate.sourceImages?.[0],crop=safeCrop(source?.crop||{x:0,y:0,width:100,height:100});return `<div class="region-box" style="left:${crop.x}%;top:${crop.y}%;width:${crop.width}%;height:${crop.height}%"><span>${index+1}</span></div>`;}).join('');
+  return `<div class="card"><div class="title"><h3>Detected regions</h3><span class="status-badge">${session.candidates.length}</span></div><p class="note">每个框代表一个独立候选。若有漏检，可用“手动添加候选”；若框把多件产品合在一起，可重新检测或编辑裁剪。</p><div class="region-overview"><img alt="批量检测区域" data-image-id="${esc(session.batchImageId)}">${boxes}</div></div>`;
+}
 function renderCandidateReview(session){
   const filter=session.reviewFilter||'all',filtered=filter==='all'?session.candidates:session.candidates.filter(c=>identificationStatus(c)===filter),showFilters=session.aiState?.status==='complete';
   const filters=showFilters?`<div class="review-filters" role="group" aria-label="AI identification filters">${[['all','Show all'],['identified','Identified'],['needs-confirmation','Needs confirmation'],['unidentified','Unidentified']].map(([value,label])=>`<button class="${filter===value?'active':''}" type="button" data-review-filter="${value}">${label}</button>`).join('')}</div>`:'';
-  return `${renderLocalComplete(session)}${renderAiStage(session)}<div class="card"><div class="title"><h3>Review detected products</h3><span class="status-badge">${session.candidates.length}</span></div><p class="note">Review remains mandatory. Edit fields, delete false detections, merge duplicates, select an alternative AI match, or mark an item unidentified. Only checked candidates are written to Cabinet.</p>${filters}<div class="toolbar"><button class="secondary" type="button" data-scan-action="add-candidate">＋ 手动添加候选</button><button class="secondary" type="button" data-scan-action="merge-candidates">合并所选检测</button></div></div><div class="candidate-list">${filtered.length?filtered.map(candidateCard).join(''):'<div class="empty-state">No candidates in this filter.</div>'}</div><div class="card"><button class="full" type="button" data-scan-action="import-candidates">Import confirmed candidates</button></div>`;
+  return `${renderLocalComplete(session)}${renderDetectionOverview(session)}${renderAiStage(session)}<div class="card"><div class="title"><h3>Review detected products</h3><span class="status-badge">${session.candidates.length}</span></div><p class="note">Review remains mandatory. Edit fields, delete false detections, merge duplicates, select an alternative AI match, or mark an item unidentified. Only checked candidates are written to Cabinet.</p>${filters}<div class="toolbar"><button class="secondary" type="button" data-scan-action="add-candidate">＋ 手动添加候选</button><button class="secondary" type="button" data-scan-action="merge-candidates">合并所选检测</button></div></div><div class="candidate-list">${filtered.length?filtered.map(candidateCard).join(''):'<div class="empty-state">No candidates in this filter.</div>'}</div><div class="card"><button class="full" type="button" data-scan-action="import-candidates">Import confirmed candidates</button></div>`;
 }
 function renderAiStage(session){
   const ai=session.aiState||{status:'off'},button=`<button class="full ai-identify-button" type="button" data-scan-action="ai-identify">Identify products with AI</button>`;
   if(ai.status==='complete'){const s=ai.summary||{};return `<div class="completion-panel ai-complete"><div><span class="completion-icon">✓</span><div><h3>AI identification complete</h3><p>Results are suggestions and still require review.</p></div></div><ul><li>${s.identified||0} products identified with high confidence</li><li>${s.needsConfirmation||0} products need confirmation or have alternatives</li><li>${s.unidentified||0} products remain unidentified</li></ul><button class="secondary" type="button" data-scan-action="ai-identify">Run AI Identification again</button></div>`;}
   if(['preparing','uploading','applying'].includes(ai.status))return `<div class="card processing-panel ai-processing"><div class="title"><h3>AI Identification</h3><span class="status-badge">CONSENTED</span></div><div class="progress-track"><span style="width:${ai.status==='preparing'?'28':ai.status==='uploading'?'62':'88'}%"></span></div><p><b>${esc(ai.message||'Processing current scan…')}</b></p><p class="note">Only images from this current scan are in scope.</p></div>`;
-  const stateMessage=ai.status==='declined'?'AI Identification was declined. No images left this device.':ai.status==='unavailable'?'AI Identification unavailable: no secure same-origin proxy is configured. No images left this device.':ai.status==='error'?`AI Identification did not complete: ${ai.message||'secure proxy request failed'}`:ai.status==='stale'?'Candidate photos or regions changed after the last AI run. Run AI Identification again if desired.':'Remote AI is OFF. Local Detection and manual review remain fully usable.';
-  return `<div class="card ai-stage-card"><div class="title"><h3>Stage 2 — AI Product Identification</h3><span class="status-badge ai-off">${AI_PROXY_ENDPOINT?'OFF UNTIL CONSENT':'NOT CONFIGURED'}</span></div><p class="note">${esc(stateMessage)}</p><p class="note">A secure same-origin backend proxy is required; no API key is stored in this public App.</p>${button}</div>`;
+  const stateMessage=ai.status==='declined'?'AI Identification was declined. No images left this device.':ai.status==='unavailable'?'AI Identification unavailable: no secure proxy is configured. No images left this device.':ai.status==='error'?`AI Identification did not complete: ${ai.message||'secure proxy request failed'}`:ai.status==='stale'?'Candidate photos or regions changed after the last AI run. Run AI Identification again if desired.':'Remote AI is OFF. Local Detection and manual review remain fully usable.';
+  return `<div class="card ai-stage-card"><div class="title"><h3>Stage 2 — AI Product Identification</h3><span class="status-badge ai-off">${aiProxyEndpoint?'OFF UNTIL CONSENT':'NOT CONFIGURED'}</span></div><p class="note">${esc(stateMessage)}</p><p class="note">A secure backend proxy is required; no provider API key is stored in this public App.</p>${button}</div>`;
 }
 function renderScanShelf(){
   const root=$('#scanRoot');if(!root)return;const session=activeScan();
-  if(!session){root.innerHTML=`<div class="card"><div class="title"><h3>Scan Shelf</h3><span class="status-badge">LOCAL FIRST</span></div><div class="stage-explainer"><div><b>Stage 1 — Local Detection</b><span>On-device loading, compression, regions, crops, pairing, color/shape evidence</span></div><div><b>Stage 2 — AI Identification</b><span>Optional · OFF by default · explicit consent required before current-scan images can leave the device</span></div></div><p class="note">Local Detection is not brand/product recognition. Without a configured secure AI proxy, the App remains fully usable for crops, pairing, manual candidate editing and import.</p><div class="scan-modes"><button type="button" data-scan-mode="single"><b>1. Single Product</b><span>1–5 张同一产品照片</span></button><button type="button" data-scan-mode="batch"><b>2. Single-Image Batch</b><span>一张图，多件产品</span></button><button type="button" data-scan-mode="paired"><b>3. Paired Batch</b><span>正面合照 + 背面合照</span></button></div></div>${scanSessions.length?`<div class="card"><h3>未完成扫描</h3>${scanSessions.map(s=>`<div class="scan-session-row"><button type="button" data-resume-scan="${esc(s.id)}"><b>${esc(SCAN_MODE_LABELS[s.mode])}</b><span>${esc(s.stage)} · ${new Date(s.updatedAt).toLocaleString()}</span></button><button class="danger" type="button" data-discard-scan="${esc(s.id)}">删除</button></div>`).join('')}</div>`:''}`;return;}
-  root.innerHTML=`<div class="scan-toolbar"><button class="secondary" type="button" data-scan-action="back">← Scan Shelf</button><b>${esc(SCAN_MODE_LABELS[session.mode])}</b></div>${session.stage==='local-processing'?renderLocalProgress(session):session.stage==='pairing'?renderPairing(session):session.stage==='review'?renderCandidateReview(session):session.stage==='imported'?'<div class="card"><h3>已导入 Cabinet</h3><p class="note">确认候选已写入本机 IndexedDB。扫描来源图、AI 建议和结构化属性会随加密备份保存。</p><button type="button" data-scan-action="back">返回 Scan Shelf</button></div>':renderScanCapture(session)}`;
+  if(!session){root.innerHTML=`<div class="card"><div class="title"><h3>Scan Shelf</h3><span class="status-badge">LOCAL FIRST</span></div><div class="stage-explainer"><div><b>Stage 1 — Local Detection</b><span>On-device loading, compression, regions, crops, pairing, color/shape evidence</span></div><div><b>Stage 2 — AI Identification</b><span>Optional · OFF by default · explicit consent required before current-scan images can leave the device</span></div></div><p class="note">Local Detection is not brand/product recognition. Without a configured secure AI proxy, the App remains fully usable for crops, pairing, manual candidate editing and import.</p><div class="scan-modes"><button type="button" data-scan-mode="single"><b>1. Single Product</b><span>1–5 张同一产品照片</span></button><button type="button" data-scan-mode="batch"><b>2. Single-Image Batch</b><span>一张图，多件产品</span></button><button type="button" data-scan-mode="paired"><b>3. Paired Batch</b><span>正面合照 + 背面合照</span></button></div></div><div class="card"><div class="title"><h3>Batch Assisted Import</h3><span class="status-badge">CHATGPT FRIENDLY</span></div><p class="note">适合一次整理 8–12 件产品：用 Paired Batch 拍正面/背面，导出 Scan Package 发给 ChatGPT；收到识别 JSON 后在这里一次导入。也可以直接导入 ChatGPT 根据你手动上传照片生成的结果 JSON。</p><div class="toolbar"><button class="secondary" type="button" data-scan-action="import-assisted-results">Import identified JSON</button></div></div>${scanSessions.length?`<div class="card"><h3>未完成扫描</h3>${scanSessions.map(s=>`<div class="scan-session-row"><button type="button" data-resume-scan="${esc(s.id)}"><b>${esc(SCAN_MODE_LABELS[s.mode])}</b><span>${esc(s.stage)} · ${new Date(s.updatedAt).toLocaleString()}</span></button><button class="danger" type="button" data-discard-scan="${esc(s.id)}">删除</button></div>`).join('')}</div>`:''}`;return;}
+  root.innerHTML=`<div class="scan-toolbar"><button class="secondary" type="button" data-scan-action="back">← Scan Shelf</button><b>${esc(SCAN_MODE_LABELS[session.mode])}</b><button class="secondary" type="button" data-scan-action="export-scan-package">Export Scan Package</button></div>${session.stage==='local-processing'?renderLocalProgress(session):session.stage==='pairing'?renderPairing(session):session.stage==='review'?renderCandidateReview(session):session.stage==='imported'?'<div class="card"><h3>已导入 Cabinet</h3><p class="note">确认候选已写入本机 IndexedDB。扫描来源图、AI 建议和结构化属性会随加密备份保存。</p><button type="button" data-scan-action="back">返回 Scan Shelf</button></div>':renderScanCapture(session)}`;
   activateLazyImages();
 }
 async function addScanFiles(kind,files){
@@ -601,8 +655,10 @@ function normalizeAiConfidence(value){let n=Number(value);if(!Number.isFinite(n)
 function normalizeAiMatch(raw={}){const confidence=normalizeAiConfidence(raw.confidence);return{brand:cleanAiText(raw.brand,120),productName:cleanAiText(raw.productName||raw.name,180),shade:cleanAiText(raw.shade,120),category:cleanAiText(raw.category,80),productLine:cleanAiText(raw.productLine||raw.version,180),barcodeText:cleanAiText(raw.barcodeText,180),batchCode:cleanAiText(raw.batchCode||raw.shadeCode,180),packagingText:cleanAiText(raw.packagingText||raw.extractedText,1600),confidence,attributes:Object.fromEntries(ATTRIBUTE_FIELDS.map(([,key])=>[key,cleanAiText(raw.attributes?.[key],120)]).filter(([,value])=>value))};}
 async function buildAiUpload(session){
   const form=new FormData(),metadata={contractVersion:AI_CONTRACT_VERSION,appVersion:APP_VERSION,scanMode:session.mode,candidates:[]};let fileIndex=0;
+  const appendStored=async(imageId,descriptor)=>{const rec=await storedImageRecord(imageId),field=`image_${fileIndex++}`;form.append(field,new Blob([rec.data],{type:rec.mime||'image/jpeg'}),`${field}.jpg`);return{field,...descriptor,mime:rec.mime||'image/jpeg'};};
   for(const candidate of session.candidates){const item={candidateId:candidate.id,images:[]};for(const source of candidate.sourceImages||[]){const rendered=await renderStoredCrop(source.imageId,source.crop||{x:0,y:0,width:100,height:100},1000),field=`image_${fileIndex++}`;form.append(field,rendered.blob,`${field}.jpg`);item.images.push({field,role:source.role||'angle',crop:safeCrop(source.crop),mime:rendered.mime});}metadata.candidates.push(item);}
-  if(session.mode==='batch'&&session.batchImageId){const rec=await storedImageRecord(session.batchImageId),field=`image_${fileIndex++}`;form.append(field,new Blob([rec.data],{type:rec.mime||'image/jpeg'}),`${field}.jpg`);metadata.batchFullImage={field,role:'group',allowsAdditionalRegions:true};}
+  if(session.mode==='batch'&&session.batchImageId)metadata.batchFullImage=await appendStored(session.batchImageId,{role:'group',allowsAdditionalRegions:true});
+  if(session.mode==='paired'&&session.frontImageId&&session.backImageId){metadata.pairedFullImages={front:await appendStored(session.frontImageId,{role:'group-front',allowsAdditionalRegions:true}),back:await appendStored(session.backImageId,{role:'group-back',allowsAdditionalRegions:true})};}
   form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}),'metadata.json');return{form,imageCount:fileIndex};
 }
 function applyAiMatch(candidate,raw){
@@ -610,16 +666,26 @@ function applyAiMatch(candidate,raw){
 }
 async function applyAiResponse(session,data){
   if(!data||!Array.isArray(data.candidates))throw new Error('invalid AI response');
-  for(const raw of data.candidates.slice(0,60)){let candidate=session.candidates.find(c=>c.id===raw.candidateId);if(!candidate&&session.mode==='batch'&&raw.crop){const crop=safeCrop(raw.crop),evidence=await analyzeStoredRegion(session.batchImageId,crop),cropImageId=await storeCropImage(session.id,session.batchImageId,crop);candidate=candidateFromSources([{imageId:session.batchImageId,role:'group',crop,evidence}],cropImageId,normalizeAiConfidence(raw.detectionConfidence)||.4);session.candidates.push(candidate);}if(candidate)applyAiMatch(candidate,raw);}
+  for(const raw of data.candidates.slice(0,80)){
+    let candidate=session.candidates.find(c=>c.id===raw.candidateId);
+    if(!candidate&&session.mode==='batch'&&raw.crop&&session.batchImageId){const crop=safeCrop(raw.crop),evidence=await analyzeStoredRegion(session.batchImageId,crop),cropImageId=await storeCropImage(session.id,session.batchImageId,crop);candidate=candidateFromSources([{imageId:session.batchImageId,role:'group',crop,evidence}],cropImageId,normalizeAiConfidence(raw.detectionConfidence)||.55);session.candidates.push(candidate);}
+    if(!candidate&&session.mode==='paired'&&(raw.frontCrop||raw.backCrop)){
+      const sources=[];let cropImageId='';
+      if(raw.frontCrop&&session.frontImageId){const crop=safeCrop(raw.frontCrop),evidence=await analyzeStoredRegion(session.frontImageId,crop),id=await storeCropImage(session.id,session.frontImageId,crop);sources.push({imageId:session.frontImageId,role:'group-front',crop,evidence});cropImageId=id;}
+      if(raw.backCrop&&session.backImageId){const crop=safeCrop(raw.backCrop),evidence=await analyzeStoredRegion(session.backImageId,crop),id=await storeCropImage(session.id,session.backImageId,crop);sources.push({imageId:session.backImageId,role:'group-back',crop,evidence});if(!cropImageId)cropImageId=id;}
+      if(sources.length){candidate=candidateFromSources(sources,cropImageId,normalizeAiConfidence(raw.detectionConfidence)||.55);session.candidates.push(candidate);}
+    }
+    if(candidate)applyAiMatch(candidate,raw);
+  }
   for(const candidate of session.candidates)if(!candidate.aiIdentification)candidate.aiIdentification={status:'unidentified',confidence:null,alternatives:[],identifiedAt:new Date().toISOString(),providerLabel:'secure-proxy'};
-  const statuses=session.candidates.map(identificationStatus);return{identified:statuses.filter(x=>x==='identified').length,needsConfirmation:statuses.filter(x=>x==='needs-confirmation').length,unidentified:statuses.filter(x=>x==='unidentified').length};
+  const statuses=session.candidates.map(identificationStatus);return{identified:statuses.filter(x=>x==='identified').length,needsConfirmation:statuses.filter(x=>x==='needs-confirmation').length,unidentified:statuses.filter(x=>x==='unidentified').length,total:session.candidates.length};
 }
 async function runAiIdentification(){
   const session=activeScan();if(!session||!session.candidates?.length)return;const consent=await requestAiConsent();if(!consent){session.aiState={status:'declined',completedAt:new Date().toISOString()};await saveScanSession(session);renderScanShelf();return;}
-  if(!AI_PROXY_ENDPOINT){session.aiState={status:'unavailable',message:'No secure same-origin proxy configured.',completedAt:new Date().toISOString(),uploaded:false};await saveScanSession(session);renderScanShelf();return;}
+  if(!aiProxyEndpoint){session.aiState={status:'unavailable',message:'No secure proxy configured.',completedAt:new Date().toISOString(),uploaded:false};await saveScanSession(session);renderScanShelf();return;}
   try{
     session.aiState={status:'preparing',message:'Preparing current-scan images…'};await saveScanSession(session);renderScanShelf();await nextPaint();const upload=await buildAiUpload(session);session.aiState={status:'uploading',message:`Sending ${upload.imageCount} current-scan image crop(s) to the secure proxy…`,imageCount:upload.imageCount};await saveScanSession(session);renderScanShelf();await nextPaint();
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);let response;try{response=await fetch(AI_PROXY_ENDPOINT,{method:'POST',body:upload.form,credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal,headers:{Accept:'application/json'}});}finally{clearTimeout(timer);}if(!response.ok)throw new Error(`secure proxy returned ${response.status}`);const text=await response.text();if(text.length>2000000)throw new Error('AI response too large');const data=JSON.parse(text);session.aiState={status:'applying',message:'Applying AI suggestions to candidates…'};await saveScanSession(session);renderScanShelf();await nextPaint();const summary=await applyAiResponse(session,data);session.aiState={status:'complete',summary,completedAt:new Date().toISOString(),imageCount:upload.imageCount};session.reviewFilter='all';await saveScanSession(session);renderScanShelf();
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);let response;try{response=await fetch(aiProxyEndpoint,{method:'POST',body:upload.form,credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal,headers:{Accept:'application/json'}});}finally{clearTimeout(timer);}if(!response.ok)throw new Error(`secure proxy returned ${response.status}`);const text=await response.text();if(text.length>2000000)throw new Error('AI response too large');const data=JSON.parse(text);session.aiState={status:'applying',message:'Applying AI suggestions to candidates…'};await saveScanSession(session);renderScanShelf();await nextPaint();const summary=await applyAiResponse(session,data);session.aiState={status:'complete',summary,completedAt:new Date().toISOString(),imageCount:upload.imageCount};session.reviewFilter='all';await saveScanSession(session);renderScanShelf();
   }catch(e){console.error(e);session.aiState={status:'error',message:e?.name==='AbortError'?'secure proxy timed out':cleanAiText(e?.message||'request failed',180),completedAt:new Date().toISOString()};await saveScanSession(session);renderScanShelf();}
 }
 function applyAiAlternative(candidate,index){const alternatives=candidate.aiIdentification?.alternatives||[],alt=alternatives[index];if(!alt)return;const match=normalizeAiMatch(alt);candidate.brand=match.brand;candidate.name=match.productName;candidate.shade=match.shade;candidate.cat=match.category||candidate.cat;candidate.productLine=match.productLine;candidate.attributes={...(candidate.attributes||{}),...match.attributes};candidate.unidentified=!candidate.name;candidate.aiIdentification={...candidate.aiIdentification,status:candidate.unidentified?'unidentified':'needs-confirmation',confidence:match.confidence,alternatives};}
@@ -766,7 +832,7 @@ async function importEncryptedBackup(file){
     const payload=await decryptBackupPack(pack,password);
     if(!confirm(`备份中有 ${payload.products.length} 件产品。导入会替换这台设备当前的 Beauty Cabinet 数据。继续？`))return;
     await replaceWithPayload(payload); toast('备份恢复成功');
-  }catch(e){console.error(e);alert('无法解密备份：密码不正确，或文件已损坏/不是 V1.5–V1.7.1 加密备份。');}
+  }catch(e){console.error(e);alert('无法解密备份：密码不正确，或文件已损坏/不是 V1.5–V1.7.2 加密备份。');}
 }
 async function importLegacy(file){
   try{
@@ -779,6 +845,47 @@ async function importLegacy(file){
     await reloadProducts(); renderAll(); toast('V1.2 数据已导入');
   }catch(e){console.error(e);alert('无法读取这个 V1.2 JSON 备份。');}
 }
+
+async function exportAssistedScanPackage(){
+  const session=activeScan();
+  if(!session){alert('请先创建或打开一个 Scan Shelf 批次。');return;}
+  try{
+    const ids=scanSourceImageIds(session),images=[];
+    for(const id of ids){
+      const rec=await idbGet('images',id);if(!rec?.data)continue;
+      images.push({id,role:rec.role||'',source:rec.source||'',mime:rec.mime||'image/jpeg',width:rec.width||0,height:rec.height||0,dataBase64:bytesToB64(rec.data)});
+    }
+    const pack={format:'beauty-cabinet-scan-package',version:1,appVersion:APP_VERSION,exportedAt:new Date().toISOString(),session:{id:session.id,mode:session.mode,stage:session.stage,sourceImages:session.sourceImages||[],batchImageId:session.batchImageId||'',frontImageId:session.frontImageId||'',backImageId:session.backImageId||'',pairings:session.pairings||[],candidates:(session.candidates||[]).map(c=>({id:c.id,sourceImages:c.sourceImages||[],cropImageId:c.cropImageId||'',detectionConfidence:detectionConfidence(c)}))},images};
+    const blob=new Blob([JSON.stringify(pack,null,2)],{type:'application/json'}),name=`BeautyCabinet-Scan-${new Date().toISOString().slice(0,10)}.beautyscan.json`,file=new File([blob],name,{type:'application/json'});
+    if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Beauty Cabinet scan package'});toast('Scan Package 已生成');return;}
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);toast('Scan Package 已导出');
+  }catch(e){console.error(e);alert('无法导出 Scan Package，请检查浏览器存储空间。');}
+}
+function chooseAssistedResultFile(){
+  const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.style.display='none';document.body.appendChild(input);
+  input.addEventListener('change',async()=>{const file=input.files?.[0];if(file)await importAssistedResults(file);input.remove();},{once:true});input.click();
+}
+function normalizeAssistedAttributes(raw={}){return Object.fromEntries(ATTRIBUTE_FIELDS.map(([,key])=>[key,String(raw?.[key]||'').trim()]));}
+async function importAssistedResults(file){
+  try{
+    const data=JSON.parse(await file.text()),items=Array.isArray(data)?data:(Array.isArray(data.items)?data.items:[]);
+    if(!items.length)throw new Error('no items');
+    if(data.format&&data.format!=='beauty-cabinet-assisted-results')throw new Error('unsupported format');
+    if(!confirm(`识别结果包含 ${items.length} 件产品。导入到这台设备的 Cabinet？`))return;
+    let imported=0;
+    for(const raw of items){
+      const id=uuid();let userImageId='';const image=raw.image||raw.userImage||null;
+      if(image?.dataBase64){
+        const bytes=b64ToBytes(String(image.dataBase64).replace(/^data:[^,]+,/,'')),imageId=uuid();
+        await idbPut('images',{id:imageId,productId:id,data:bytes.buffer,mime:image.mime||'image/jpeg',width:Number(image.width)||0,height:Number(image.height)||0,source:'assisted_import',updatedAt:new Date().toISOString()});userImageId=imageId;
+      }
+      const p={id,name:String(raw.name||raw.productName||'未命名产品').trim(),brand:String(raw.brand||'').trim(),cat:String(raw.cat||raw.category||'Other'),shade:String(raw.shade||'').trim(),form:String(raw.form||raw.texture||'Other'),fit:String(raw.fit||'').trim(),role:String(raw.role||raw.pairingNotes||'').trim(),productLine:String(raw.productLine||'').trim(),barcodeText:String(raw.barcodeText||'').trim(),batchCode:String(raw.batchCode||'').trim(),packagingText:String(raw.packagingText||'').trim(),identification:raw.identification||{status:'assisted-import',source:'ChatGPT/manual review'},attributes:normalizeAssistedAttributes(raw.attributes||{}),made:String(raw.made||'').trim(),bought:String(raw.bought||'').trim(),opened:String(raw.opened||'').trim(),pao:String(raw.pao||'').trim(),status:String(raw.status||'需检查'),notes:String(raw.notes||'通过 Batch Assisted Import 导入').trim(),officialImageUrl:'',userImageId,officialImageId:'',imageId:userImageId,imageSource:userImageId?'assisted_import':'',scanCropImageId:'',sourceImages:[],relationships:Array.isArray(raw.relationships)?raw.relationships:[],createdAt:new Date().toISOString()};
+      await saveProduct(p);imported++;
+    }
+    await reloadProducts();renderAll();toast(`已导入 ${imported} 件产品`);tab('cabinet');
+  }catch(e){console.error(e);alert('无法读取 Batch Assisted Import JSON。请确认文件由 Beauty Cabinet/ChatGPT 生成，且包含 items 数组。');}
+}
+
 async function clearAllData(){
   if(!confirm('这会永久删除这台设备上的 Beauty Cabinet 数据。建议先导出加密备份。继续？'))return;
   if(!confirm('最后确认：删除后无法撤销。'))return;
@@ -800,13 +907,15 @@ function bindEvents(){
   $('#legacyImportBtn').addEventListener('click',()=>$('#legacyImportFile').click());
   $('#legacyImportFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importLegacy(f);e.target.value='';});
   $('#clearBtn').addEventListener('click',clearAllData);
+  if($('#saveAiEndpointBtn'))$('#saveAiEndpointBtn').addEventListener('click',async()=>{try{await saveAiEndpoint($('#aiEndpointInput').value);renderAll();toast(aiProxyEndpoint?'AI endpoint 已保存到本机':'AI endpoint 已关闭');}catch(e){alert(e.message||'AI endpoint 无效');}});
+  if($('#clearAiEndpointBtn'))$('#clearAiEndpointBtn').addEventListener('click',async()=>{await saveAiEndpoint('');renderAll();toast('AI endpoint 已关闭');});
   $('#runCompareBtn').addEventListener('click',runCompare);
   document.addEventListener('click',async e=>{
     const t=e.target.closest('button[data-tab]');if(t){tab(t.dataset.tab);return;}
     const mode=e.target.closest('[data-scan-mode]');if(mode){await startScanMode(mode.dataset.scanMode);return;}
     const resume=e.target.closest('[data-resume-scan]');if(resume){activeScanId=resume.dataset.resumeScan;renderScanShelf();return;}
     const discard=e.target.closest('[data-discard-scan]');if(discard){await discardScanSession(discard.dataset.discardScan);return;}
-    const scanAction=e.target.closest('[data-scan-action]');if(scanAction){const action=scanAction.dataset.scanAction;if(action==='back'){activeScanId='';renderScanShelf();}else if(action==='local-detect'||action==='recognize')await startLocalDetection();else if(action==='ai-identify')await runAiIdentification();else if(action==='confirm-pairings')await confirmPairings();else if(action==='merge-candidates')await mergeCandidates();else if(action==='add-candidate')await addManualCandidate();else if(action==='import-candidates')await importCandidates();return;}
+    const scanAction=e.target.closest('[data-scan-action]');if(scanAction){const action=scanAction.dataset.scanAction;if(action==='back'){activeScanId='';renderScanShelf();}else if(action==='local-detect'||action==='recognize')await startLocalDetection();else if(action==='ai-identify')await runAiIdentification();else if(action==='confirm-pairings')await confirmPairings();else if(action==='merge-candidates')await mergeCandidates();else if(action==='add-candidate')await addManualCandidate();else if(action==='import-candidates')await importCandidates();else if(action==='export-scan-package')await exportAssistedScanPackage();else if(action==='import-assisted-results')chooseAssistedResultFile();return;}
     const reviewFilter=e.target.closest('[data-review-filter]');if(reviewFilter){const session=activeScan();if(session){session.reviewFilter=reviewFilter.dataset.reviewFilter;await saveScanSession(session);renderScanShelf();}return;}
     const candidateButton=e.target.closest('[data-candidate-action]');if(candidateButton){await candidateAction(candidateButton.dataset.candidateAction,candidateButton.dataset.id);return;}
     const p=e.target.closest('[data-product-id]');if(p&&!p.closest('#productForm')){showProduct(p.dataset.productId);return;}
@@ -829,6 +938,7 @@ async function start(){
   try{
     await cleanupLegacyWebState();
     db=await openDB();
+    await loadAiEndpoint();
     bindEvents();
     try{if(navigator.storage?.persist) await navigator.storage.persist();}catch(e){}
     await reloadProducts();await reloadScanSessions();renderAll();

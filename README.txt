@@ -1,130 +1,90 @@
-Beauty Cabinet V1.7.1 — Local Detection + optional AI Identification
+Beauty Cabinet V1.7.3 — improved multi-object Scan Shelf + optional real AI recognition
 
-V1.7 FEATURES PRESERVED
-- Cabinet, Product Passport, thumbnails, product editing and dual local image fields.
-- Your real-life product image plus an official/reference image and optional source URL.
-- Similar & Overlap, Compare, Expiry / PAO and product status management.
-- Structured attributes: hue, undertone, saturation, depth, texture, finish, coverage and function.
-- Relationship classes: True Duplicate, Color Duplicate, Functional Duplicate, Complementary and Unique.
-- Single Product Multi-Photo, Single-Image Batch and Paired Batch Scan.
-- Front/back pairing confirmation, candidate review/edit/delete/merge, unidentified marking and candidate-specific extra photos.
-- No login, local IndexedDB, V1.2 JSON import and AES-256-GCM encrypted .beautybackup import/export.
+WHAT IS FIXED IN V1.7.3
+- Reworked Single-Image Batch local detection. It no longer applies blanket dilation that easily merged adjacent products into one giant region.
+- Added adaptive background estimation, foreground masking, recursive whitespace splitting, aggressive fallback segmentation, and duplicate-box suppression.
+- Review now shows a full-image “Detected regions” overlay so you can immediately see whether one photo was split into multiple candidates.
+- If a batch still collapses to one region, the App explicitly warns that local segmentation is insufficient and suggests manual candidates or AI Identification.
+- AI Identification can now use the full current batch image and may return additional missed products with bounding boxes.
+- Paired Batch AI requests can include the full front and back group images; a secure backend may return new paired frontCrop/backCrop candidates.
+- Added optional local AI endpoint configuration under Privacy. The URL is stored only in this device's IndexedDB.
+- GitHub Pages can now connect only to the same origin plus HTTPS *.workers.dev endpoints. No API key belongs in the browser or repository.
+- Version bumped to V1.7.3. Existing IndexedDB and encrypted backup formats remain compatible.
 
-WHAT V1.7.1 CHANGES
-- Scan Shelf now clearly separates two stages:
-  Stage 1 — Local Detection
-  Stage 2 — AI Product Identification
-- Local image loading, compression, region proposals, crops, color/shape evidence and front/back pairing are never described as product recognition.
-- Local Detection has a visible progress panel and a persistent completion panel with candidate/crop/manual-adjustment counts.
-- “Local confidence” is replaced by Detection confidence.
-- Identification confidence is shown only after a configured AI proxy returns an identification result.
-- Single-Image Batch uses a two-dimensional connected-region proposal method, including products arranged in multiple rows. It remains a heuristic, so all crops are editable.
-- AI Identification is optional, OFF by default and requires explicit confirmation for every run.
-- Candidate review remains mandatory after AI suggestions. Alternative matches can be selected before import.
-- Visible product line/version, barcode text, batch/shade code and packaging text can be edited and saved.
-- AI completion has a persistent summary and filters: Show all, Identified, Needs confirmation and Unidentified.
+IMPORTANT LIMITATION
+Reliable cosmetic brand/product/shade recognition is not realistically achievable with the lightweight browser-only detector. Local Detection is for crops/regions and still may miss touching, reflective, low-contrast, or complex-background products. True recognition and robust multi-object recovery require the optional vision-AI backend.
 
-EXACT BEHAVIOR WITHOUT AN AI PROXY
-- Local Detection, all three scan modes, crops, pairing, manual editing and Cabinet import continue to work.
-- The “Identify products with AI” button still opens the full privacy confirmation.
-- If the user declines, no image is prepared or transmitted and the review screen states that AI was declined.
-- If the user approves but no secure proxy is configured, no fetch/upload occurs. The review screen states that AI is unavailable and no images left the device.
-- The App never fabricates brand, product, shade or identification-confidence results.
+OPTIONAL REAL AI BACKEND
+The folder backend/ contains a Cloudflare Worker template:
+- backend/beauty-ai-worker.js
+- backend/wrangler.toml.example
+- backend/README.md
 
-PRIVACY BOUNDARY
-- Only after explicit per-run confirmation can the client send images.
-- The request builder reads only sourceImages[] belonging to candidates in the active scan. For batch mode it can additionally send that active scan's full batch image so the proxy may propose missed regions.
-- Existing Cabinet records, skin profile, skincare history and unrelated stored images are not read into the AI request.
-- Requests use credentials: omit, no-referrer and no-store semantics.
-- No API key, provider token or personal data is stored in the repository.
-- Content Security Policy allows connections only to the same origin.
-- GitHub receives generic App code only; IndexedDB data is never committed.
+The Worker keeps OPENAI_API_KEY as a server-side secret and calls the OpenAI Responses API with image inputs. It is instructed to:
+- enumerate every distinct cosmetic/skincare product in a batch image
+- return a separate bounding box for each item
+- combine multiple views of the same product
+- pair front/back group images in Paired Batch mode
+- read visible brand/product/shade/batch text when possible
+- return null instead of inventing uncertain details
 
-SECURE AI PROXY CONFIGURATION
-GitHub Pages cannot safely hold a private AI API key. A real recognizer therefore requires a server-side, same-origin proxy that keeps provider credentials on the server.
+The client sends nothing automatically. Each AI run requires explicit per-scan consent. Only images from the current scan are included; the existing Cabinet, backup, skin profile, history, and unrelated images are not sent.
 
-The shipped index.html contains this disabled setting:
-  <meta name="beauty-ai-endpoint" content="">
+HOW TO ENABLE AI IDENTIFICATION
+1. Deploy backend/beauty-ai-worker.js as a Cloudflare Worker.
+2. Store your OpenAI API key as the Worker secret OPENAI_API_KEY. Never place it in GitHub or app.js.
+3. Set ALLOWED_ORIGIN to your GitHub Pages origin, e.g. https://conilia.github.io.
+4. Copy the Worker HTTPS *.workers.dev URL.
+5. Beauty Cabinet → Privacy → AI Recognition proxy → paste the Worker URL → Save.
+6. Scan Shelf → Local Detection → Identify products with AI → explicitly confirm this scan upload.
 
-An operator with a secure same-origin backend may set a relative URL, for example:
-  <meta name="beauty-ai-endpoint" content="/api/beauty-identify">
+Without the Worker, all normal Cabinet, Product Passport, Compare, Expiry, Scan Shelf local crops, Paired Batch, manual editing, and encrypted backups continue to work.
 
-Do not put an API key in this tag or anywhere in frontend JavaScript.
+V1.7/V1.7.1 FEATURES PRESERVED
+- Cabinet and Product Passport
+- user product image + official/reference image
+- Similar & Overlap / Compare
+- Expiry / PAO
+- structured hue/undertone/saturation/depth/texture/finish/coverage/function fields
+- True Duplicate / Color Duplicate / Functional Duplicate / Complementary / Unique
+- Single Product Multi-Photo
+- Single-Image Batch
+- Paired Batch and pairing confirmation
+- mandatory candidate review/edit/delete/merge/unidentified handling
+- candidate-specific extra bottom/side photo
+- local IndexedDB
+- no daily login
+- AES-256-GCM + PBKDF2 encrypted .beautybackup
+- V1.2 JSON migration
+- iPhone/iPad Safari and Windows browser layout
 
-CLIENT REQUEST CONTRACT — multipart/form-data
-- metadata: metadata.json with:
-  contractVersion: 1
-  appVersion
-  scanMode: single | batch | paired
-  candidates[]: candidateId and images[]
-  each image descriptor: field, role, crop and mime
-  optional batchFullImage when scanMode is batch
-- image_N: compressed current-scan crop/image files
+PRIVACY
+- Personal inventory and images remain in local IndexedDB unless you explicitly initiate an AI scan upload.
+- AI consent is per run.
+- Browser App contains no OpenAI API key.
+- Worker source may be public; the secret must only exist in Cloudflare's secret store.
+- Review the AI provider's image/data controls before enabling cloud recognition.
 
-EXPECTED JSON RESPONSE
-{
-  "contractVersion": 1,
-  "candidates": [
-    {
-      "candidateId": "existing candidate id",
-      "brand": "...",
-      "productName": "...",
-      "shade": "...",
-      "category": "...",
-      "productLine": "...",
-      "barcodeText": "...",
-      "batchCode": "...",
-      "packagingText": "...",
-      "confidence": 0.0,
-      "attributes": {
-        "hue": "...",
-        "undertone": "...",
-        "saturation": "...",
-        "depth": "...",
-        "texture": "...",
-        "finish": "...",
-        "coverage": "...",
-        "function": "..."
-      },
-      "alternatives": []
-    }
-  ]
-}
+DEPLOY APP UPDATE
+1. Export a .beautybackup first.
+2. Upload the root App files to your existing GitHub Pages repo, replacing the old versions.
+3. Do not upload .beautybackup, personal product photos, or JSON inventory files.
+4. Commit and wait for Pages deployment.
+5. Open once with ?v=172.
+6. Confirm header: V1.7.3.
 
-For a batch item missed locally, the proxy may return an item without candidateId and include crop {x,y,width,height} percentages plus detectionConfidence. The client creates an editable candidate and local crop; it still does not import it automatically.
+TEST CHECKLIST
+- Batch photo with several separated products should now create multiple candidates more often.
+- Review shows boxes on the full batch image.
+- Local detector warning appears when it only finds one region.
+- Existing product/backup data survives upgrade.
+- AI button does not upload if consent is declined.
+- AI button reports unavailable when no endpoint is configured.
+- With Worker configured, full batch image may add multiple AI-detected products and candidates still require manual confirmation before import.
 
-Proxy requirements:
-- authenticate/authorize users according to the deployment's needs without exposing provider keys to the browser
-- enforce request size, image count, MIME and timeout limits
-- validate Origin and return JSON only
-- document the AI provider and its retention policy
-- never request or join Cabinet/profile data
 
-DATA AND BACKUP COMPATIBILITY
-- IndexedDB name remains beauty-cabinet-local-v15 and schema version remains 2.
-- Existing products, images, settings, scan sessions and relationship stores are preserved in place.
-- Encrypted backup envelope/payload remain version 2.
-- Existing V1.6 and V1.7 backups can be restored; missing V1.7.1 fields are optional.
-- V1.7.1 products retain structured attributes, expiry fields, source images, AI suggestions selected by the user and relationship records.
-- Existing behavior of backing up unfinished local scan sessions is preserved.
-
-DEPLOY TO THE EXISTING GITHUB PAGES REPOSITORY
-1. Export an encrypted .beautybackup from the current App.
-2. Upload all seven files in this folder to the existing repository root, replacing files with the same names.
-3. Do not upload product photos, JSON files or .beautybackup files.
-4. Commit and wait for GitHub Pages deployment.
-5. Open the existing site once with ?v=171 appended.
-6. Confirm the header says V1.7.1.
-
-DEVICE CHECKLIST
-- iPhone Safari: Take photo, Choose Photos, multiple single-product photos and candidate-specific extra photo.
-- iPad Safari: the same flows plus Paired Batch.
-- Windows Chrome/Edge: batch regions, pairing correction, candidate filters, edit and import.
-- Decline AI confirmation and verify “no images left this device”.
-- Approve AI confirmation with no configured proxy and verify “AI unavailable” with no network upload.
-- With a test proxy configured, verify completion summary, alternatives and filters.
-- Reload an unfinished scan and verify persistence.
-- Export and restore an encrypted backup.
-
-SAFARI STORAGE NOTE
-iPhone/iPad Safari may remove website storage under device pressure or when site data is cleared. Do not use Private Browsing for durable data. Keep periodic encrypted .beautybackup files in Files, iCloud Drive or another location you control.
+V1.7.3 ADDITION — BATCH ASSISTED IMPORT
+- Export Scan Package from any active Scan Shelf session as .beautyscan.json.
+- Import ChatGPT/externally reviewed identification results using the local-only `beauty-cabinet-assisted-results` JSON format.
+- Result JSON can optionally embed one compressed product image per item as base64; imported data is written only to local IndexedDB.
+- No assisted-import file is uploaded automatically.
