@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.8.2';
+const APP_VERSION = '1.8.3';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -955,17 +955,21 @@ function productIdentitySimilarity(a,b){
 function analyzeRelation(a,b){
   const kindA=recCategory(a),kindB=recCategory(b),sameKind=kindA===kindB&&kindA!=='other',sameFamily=categoryFamily(a.cat)&&categoryFamily(a.cat)===categoryFamily(b.cat);
   const identity=productIdentitySimilarity(a,b),nameSim=textSimilarity(a.name,b.name),shadeSim=textSimilarity(a.shade,b.shade),roleSim=textSimilarity(a.role,b.role),colorScore=colorSimilarity(a,b),functionScore=textureSimilarity(a,b);
+  const exactBrand=norm(a.brand)&&norm(a.brand)===norm(b.brand),exactName=norm(a.name)&&norm(a.name)===norm(b.name),bothShade=!!(norm(a.shade)&&norm(b.shade)),exactShade=bothShade&&norm(a.shade)===norm(b.shade);
+  const exactForm=!norm(a.form)||!norm(b.form)||norm(a.form)===norm(b.form);
   let kind='unique',label='Unique',score=Math.round(15+25*Math.max(identity,colorScore,functionScore,roleSim)),summary='没有发现明显重复。';
-  if((identity>=.78&&shadeSim>=.68)||(norm(a.brand)===norm(b.brand)&&nameSim>=.9&&shadeSim>=.82)){
-    kind='true';label='True Duplicate';score=Math.round(92+Math.min(7,shadeSim*7));summary='品牌/产品身份与色号高度一致，最可能是真正重复。';
-  }else if(sameKind&&colorScore>=.66){
-    kind='color';label='Color Duplicate';score=Math.round(72+colorScore*20);summary='颜色与用途高度重合，但品牌、质地或妆效仍可能不同。';
+  // True Duplicate: same product identity and same shade (or a shade-less single product with same format/category).
+  if((exactBrand&&exactName&&(exactShade||(!bothShade&&sameKind&&exactForm)))||(identity>=.78&&shadeSim>=.68)||(exactBrand&&nameSim>=.9&&shadeSim>=.82)){
+    kind='true';label='True Duplicate';score=Math.round(92+Math.min(7,Math.max(shadeSim,exactShade?1:0)*7));summary='品牌、产品身份和色号/版本高度一致，最可能是真正重复。';
+  // Color Duplicate: same use category and meaningfully similar hue/tone/depth, even when free-text shade names differ.
+  }else if(sameKind&&colorScore>=.50){
+    kind='color';label='Color Duplicate';score=Math.round(68+colorScore*24);summary='颜色方向与用途明显重合，但品牌、质地、妆效或深浅可能不同。';
   }else if(sameKind||(sameFamily&&(functionScore>=.5||roleSim>=.32))){
     kind='functional';label='Functional Duplicate';score=Math.round(60+(sameKind?10:4)+functionScore*18+roleSim*8);summary='承担相近功能，但颜色、质地或妆效存在明显差异。';
   }
   const shared=[],differences=[];
   for(const [title,get] of DIFFERENCE_FIELDS){const av=String(get(a)||'').trim(),bv=String(get(b)||'').trim();if(av&&bv&&norm(av)===norm(bv))shared.push(`${title}：${av}`);else if(av||bv)differences.push({title,a:av||'未记录',b:bv||'未记录'});}
-  return {kind,label,score:Math.min(99,score),summary,shared,differences,signals:{identity,name:nameSim,shade:shadeSim,color:colorScore,function:functionScore}};
+  return {kind,label,score:Math.min(99,score),summary,shared,differences,signals:{identity,name:nameSim,shade:shadeSim,color:colorScore,function:functionScore},sameKind};
 }
 function goodCandidateWeight(p){const r=personalRecommendation(p);if(p.status==='停止使用'||attentionInfo(p).level==='bad')return -35;if(r.tier==='low')return -18;if(r.tier==='caution')return -9;if(r.tier==='excellent')return 10;if(r.tier==='good')return 6;return 0;}
 function isMutedBalancer(p){const t=relationText(p);return recHas(t,['mauve','dusty rose','smoky rose','rosewood','taupe','greige','grey','gray','plum','berry','wine','burgundy','neutral','cool','灰粉','灰玫瑰','玫瑰木','灰棕','灰紫','莓','酒红','中性']);}
@@ -1019,29 +1023,53 @@ function rescueScore(target,candidate){
   return {score,reasons:[...new Set(reasons)].slice(0,3)};
 }
 function relationshipInsights(p){
-  const duplicates=[],pairings=[],rescues=[];
+  const groups={true:[],color:[],functional:[]},pairings=[],rescues=[];
   for(const q of products){if(q.id===p.id)continue;
-    const rel=analyzeRelation(p,q);if(['true','color','functional'].includes(rel.kind)&&rel.score>=63)duplicates.push({product:q,relation:rel,score:rel.score});
+    const rel=analyzeRelation(p,q);
+    if(groups[rel.kind]&&rel.score>=60)groups[rel.kind].push({product:q,relation:rel,score:rel.score});
     const pair=pairingScore(p,q);if(pair.score>=16)pairings.push({product:q,score:Math.round(pair.score),reasons:pair.reasons});
     const rescue=rescueScore(p,q);if(rescue.score>=18)rescues.push({product:q,score:Math.round(rescue.score),reasons:rescue.reasons});
   }
-  duplicates.sort((a,b)=>b.score-a.score);pairings.sort((a,b)=>b.score-a.score);rescues.sort((a,b)=>b.score-a.score);
+  for(const k of Object.keys(groups))groups[k].sort((a,b)=>b.score-a.score);
+  pairings.sort((a,b)=>b.score-a.score);rescues.sort((a,b)=>b.score-a.score);
   const dedupe=(arr,limit)=>{const seen=new Set();return arr.filter(x=>{if(seen.has(x.product.id))return false;seen.add(x.product.id);return true;}).slice(0,limit);};
+  const duplicateGroups={true:dedupe(groups.true,5),color:dedupe(groups.color,5),functional:dedupe(groups.functional,5)};
   const needsRescue=['blush','lip','eyeshadow','bronzer','highlighter'].includes(recCategory(p))&&isWarmAccent(p);
-  return {duplicates:dedupe(duplicates,6),pairings:dedupe(pairings,6),rescues:dedupe(rescues,5),needsRescue};
+  return {duplicateGroups,pairings:dedupe(pairings,6),rescues:dedupe(rescues,5),needsRescue};
 }
-function relationDifferenceSummary(target,item){const r=item.relation;if(!r)return '';const diffs=r.differences||[];const priority=['质地','妆效','颜色/色号','品牌','适配'];const parts=[];for(const key of priority){const d=diffs.find(x=>x.title===key);if(d)parts.push(`${key}：${d.a} ↔ ${d.b}`);if(parts.length===2)break;}return parts.join('；')||r.summary;}
+function relationExplanation(target,item){
+  const r=item.relation;if(!r)return {same:'',different:''};
+  const same=[];
+  if(r.sameKind)same.push(`同为${recCategoryLabel(recCategory(target))}`);
+  if(r.signals?.identity>=.72)same.push('产品身份高度接近');
+  if(r.signals?.color>=.50)same.push('颜色方向接近');
+  if(r.signals?.function>=.62)same.push('质地/功能接近');
+  for(const x of (r.shared||[])){const short=x.replace(/^类别：/,'').replace(/^功能：/,'');if(short&&!same.includes(short))same.push(short);if(same.length>=3)break;}
+  if(!same.length)same.push(r.summary);
+  const diffs=[];const priority=['颜色/色号','质地','妆效','品牌','深浅','冷暖调','适配'];
+  for(const key of priority){const d=(r.differences||[]).find(x=>x.title===key);if(d){diffs.push(`${key}：${d.a} ↔ ${d.b}`);if(diffs.length===2)break;}}
+  if(!diffs.length)diffs.push(r.kind==='true'?'目前记录中没有关键差异':'关键差异信息不足');
+  return {same:same.slice(0,3).join('；'),different:diffs.join('；')};
+}
 function relationshipProductCard(target,item,type){
   const q=item.product,img=imageSlots(q).primaryImageId;let badge='',body='';
-  if(type==='duplicate'){badge=`${item.relation.label} · ${item.score}%`;body=relationDifferenceSummary(target,item);}
-  else {badge=type==='rescue'?'Rescue':'Works With';body=(item.reasons||[]).join('；');}
-  return `<article class="auto-relation-item"><button type="button" class="auto-relation-main" data-related-product="${esc(q.id)}">${img?`<img alt="" data-image-id="${esc(img)}">`:'<span class="auto-relation-img placeholder">✦</span>'}<span class="auto-relation-copy"><b>${esc(q.brand?`${q.brand} · `:'')}${esc(q.name)}</b><small>${esc(q.shade||q.cat||'')}</small><em>${esc(body)}</em></span><span class="relation-badge">${esc(badge)}</span></button></article>`;
+  if(type==='duplicate'){
+    badge=`${item.relation.label} · ${item.score}%`;
+    const ex=relationExplanation(target,item);
+    body=`<span class="relation-explain-line"><b>相似：</b>${esc(ex.same)}</span><span class="relation-explain-line"><b>不同：</b>${esc(ex.different)}</span>`;
+  }else {badge=type==='rescue'?'Rescue':'Works With';body=`<span class="relation-explain-line">${esc((item.reasons||[]).join('；'))}</span>`;}
+  return `<article class="auto-relation-item"><button type="button" class="auto-relation-main" data-related-product="${esc(q.id)}">${img?`<img alt="" data-image-id="${esc(img)}">`:'<span class="auto-relation-img placeholder">✦</span>'}<span class="auto-relation-copy"><b>${esc(q.brand?`${q.brand} · `:'')}${esc(q.name)}</b><small>${esc(q.shade||q.cat||'')}</small><em>${body}</em></span><span class="relation-badge">${esc(badge)}</span></button></article>`;
+}
+function duplicateGroupHTML(title,subtitle,items,target,cssClass=''){
+  const list=items.length?items.map(x=>relationshipProductCard(target,x,'duplicate')).join(''):`<p class="note relation-empty">当前没有发现 ${esc(title)}。</p>`;
+  return `<section class="duplicate-group ${esc(cssClass)}"><div class="duplicate-group-head"><div><b>${esc(title)}</b><span>${esc(subtitle)}</span></div><span class="count-pill">${items.length}</span></div>${list}</section>`;
 }
 function relationshipSectionsHTML(p,insights=relationshipInsights(p)){
-  const dup=insights.duplicates.length?insights.duplicates.map(x=>relationshipProductCard(p,x,'duplicate')).join(''):'<p class="note">当前库存里没有发现明显重复产品。</p>';
+  const g=insights.duplicateGroups||{true:[],color:[],functional:[]};
+  const dup=`${duplicateGroupHTML('True Duplicate','同品牌 / 同产品 / 同色号或同版本，最接近真正重复',g.true,p,'true-duplicate')}${duplicateGroupHTML('Color Duplicate','颜色与用途高度重合，但配方、质地或妆效可能不同',g.color,p,'color-duplicate')}${duplicateGroupHTML('Functional Duplicate','承担相近功能，但颜色或使用体验不同',g.functional,p,'functional-duplicate')}`;
   const pair=insights.pairings.length?insights.pairings.map(x=>relationshipProductCard(p,x,'pair')).join(''):'<p class="note">目前没有足够信息生成具体搭配；补充产品属性或实际使用反馈后会更准确。</p>';
   const rescue=insights.needsRescue?`<div class="relationship-auto-block rescue-block"><div class="relationship-auto-head"><div><b>这个暖色怎么救</b><span>从你自己的 Cabinet 里找具体平衡产品</span></div></div>${insights.rescues.length?insights.rescues.map(x=>relationshipProductCard(p,x,'rescue')).join(''):'<p class="note">暂时没有找到足够合适的低饱和/中性平衡产品。以后录入 mauve、灰玫瑰、taupe 等产品后会自动出现。</p>'}</div>`:'';
-  return `<div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Similar & Duplicates</b><span>自动扫描整个 Cabinet，不需要手动 Compare</span></div><span class="status-badge">LOCAL</span></div>${dup}</div><div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Works Best With · 和什么搭</b><span>按类别、颜色、质地和你的适配记录自动推荐</span></div><span class="status-badge">LOCAL</span></div>${pair}</div>${rescue}`;
+  return `<div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Similar & Duplicates</b><span>自动扫描整个 Cabinet，并分别显示三种重复关系</span></div><span class="status-badge">LOCAL</span></div>${dup}</div><div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Works Best With · 和什么搭</b><span>按类别、颜色、质地和你的适配记录自动推荐</span></div><span class="status-badge">LOCAL</span></div>${pair}</div>${rescue}`;
 }
 
 function openModal(html){$('#modalBody').innerHTML=html;$('#modal').classList.add('open');$('#modal').setAttribute('aria-hidden','false');document.body.style.overflow='hidden';}

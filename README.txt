@@ -1,6 +1,6 @@
-Beauty Cabinet V1.8.2 — Relationship & Pairing Engine
+Beauty Cabinet V1.8.3 — Relationship & Pairing Engine
 
-NEW IN V1.8.2
+NEW IN V1.8.3
 - Removed the standalone Compare page/navigation because manual 2–4 item comparison is not practical for a library of hundreds of products.
 - Kept and upgraded the underlying comparison logic; no relationship capability was removed.
 - Product Passport now automatically scans the local Cabinet and shows Similar & Duplicates without manual selection.
@@ -72,7 +72,7 @@ Without the Worker, all normal Cabinet, Product Passport, Compare, Expiry, Scan 
 V1.7/V1.7.1 FEATURES PRESERVED
 - Cabinet and Product Passport
 - user product image + official/reference image
-- Similar & Overlap relationship logic (the standalone Compare page was removed in V1.8.2)
+- Similar & Overlap relationship logic (the standalone Compare page was removed in V1.8.3)
 - Expiry / PAO
 - structured hue/undertone/saturation/depth/texture/finish/coverage/function fields
 - True Duplicate / Color Duplicate / Functional Duplicate / Complementary / Unique
