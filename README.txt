@@ -1,3 +1,16 @@
+Beauty Cabinet V1.8.1 — Personal Match Engine
+
+NEW IN V1.8.1
+- Added a fully local Personal Match recommendation engine.
+- Uses My Skin baseline + structured product attributes + saved fit/role + myResult.
+- User real-world feedback (myResult) takes priority over generic colour theory.
+- Adds automatic suitability tiers: 很适合 / 适合 / 有条件适合 / 谨慎使用 / 低优先级 / 信息不足.
+- Product Passport now shows automatic reasons, cautions, and usage tips without overwriting manual records.
+- My Skin page now summarizes the most suitable and caution products and offers a full local recommendation explorer by category.
+- Rules include muted/olive colour logic, combination-skin zone use, visible-pore highlighter placement, oily/hooded eyelid guidance, eye-sensitivity glitter cautions, and bronzer-vs-contour positioning.
+- No AI/API/network call is needed for Personal Match. All calculations happen locally.
+- Existing V1.8.0 My Skin, Quick Find, Scan, Compare, Expiry, Batch Assisted Import, IndexedDB, and encrypted backup behavior is preserved.
+
 Beauty Cabinet V1.8.0 — My Skin Profile
 
 Beauty Cabinet V1.7.4 — improved multi-object Scan Shelf + optional real AI recognition

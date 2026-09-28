@@ -12,16 +12,16 @@
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://*.workers.dev; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
   <meta name="beauty-ai-endpoint" content="">
-  <link rel="manifest" href="manifest.webmanifest?v=1800">
-  <link rel="stylesheet" href="styles.css?v=1800">
-  <title>Beauty Cabinet V1.8.0 My Skin</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1810">
+  <link rel="stylesheet" href="styles.css?v=1810">
+  <title>Beauty Cabinet V1.8.1 Personal Match</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.8.0 · My Skin Profile + Quick Find</div>
+    <div class="sub">V1.8.1 · Personal Match + My Skin + Quick Find</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -120,6 +120,11 @@
       <div id="skinProfileSummary"></div>
     </div>
     <div class="card">
+      <div class="title"><div><h3>Personal Match · 个性化适配引擎</h3><div class="note">完全在本机根据 My Skin、产品结构化属性、你手工记录的 fit / role，以及最重要的 myResult 实际反馈实时计算。不会覆盖你的原始记录。</div></div><button id="openRecommendationExplorerBtn" type="button">查看全部</button></div>
+      <div class="profile-privacy">🧠 规则引擎本地运行 · 不调用云端 AI · 你的实际上脸反馈优先于理论色彩规则</div>
+      <div id="personalRecommendationSummary"></div>
+    </div>
+    <div class="card">
       <div class="title"><h3>档案工具</h3></div>
       <div class="toolbar">
         <button id="importSkinProfileBtn" class="secondary" type="button">导入本地 Profile JSON</button>
@@ -149,7 +154,7 @@
         <div>Network</div><div>默认不上传；仅在当前扫描逐次确认后可访问同源安全代理</div>
         <div>AI Identification</div><div id="aiConfigStatus">OFF · secure proxy not configured</div>
         <div>Local Detection</div><div>本机压缩、候选区域、裁剪、颜色与配对建议</div>
-        <div>Version</div><div>V1.8.0</div>
+        <div>Version</div><div>V1.8.1</div>
       </div>
       <div class="card inset-card top-gap">
         <b>AI Recognition proxy（可选）</b>
@@ -179,6 +184,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=1800" defer></script>
+<script src="app.js?v=1810" defer></script>
 </body>
 </html>
