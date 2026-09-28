@@ -1,3 +1,17 @@
+Beauty Cabinet V1.8.2 — Relationship & Pairing Engine
+
+NEW IN V1.8.2
+- Removed the standalone Compare page/navigation because manual 2–4 item comparison is not practical for a library of hundreds of products.
+- Kept and upgraded the underlying comparison logic; no relationship capability was removed.
+- Product Passport now automatically scans the local Cabinet and shows Similar & Duplicates without manual selection.
+- Automatically distinguishes True Duplicate, Color Duplicate and Functional Duplicate, with concise differences such as texture, finish and shade.
+- Added Works Best With: concrete products from the user's own Cabinet are recommended using category, colour, undertone, texture, finish, Personal Match, fit and myResult.
+- Added Warm Tone Rescue: warm/orange/coral/copper/gold products can receive specific rescue suggestions from the user's own Cabinet, e.g. mauve/dusty-rose blush, taupe/muted eyeshadow or neutral lipliner.
+- For warm blushes, the engine can suggest a practical starting mix such as 1 part warm blush to 2–3 parts muted balancing blush.
+- Recommendations are local and deterministic; no AI/API/network request is needed.
+- User real-world feedback remains higher priority than generic colour theory; unsafe/expired products are penalized.
+- Existing Cabinet, Quick Find, Scan, Batch Assisted Import, Expiry, My Skin, Personal Match, encrypted backup and IndexedDB remain intact.
+
 Beauty Cabinet V1.8.1 — Personal Match Engine
 
 NEW IN V1.8.1
@@ -9,7 +23,7 @@ NEW IN V1.8.1
 - My Skin page now summarizes the most suitable and caution products and offers a full local recommendation explorer by category.
 - Rules include muted/olive colour logic, combination-skin zone use, visible-pore highlighter placement, oily/hooded eyelid guidance, eye-sensitivity glitter cautions, and bronzer-vs-contour positioning.
 - No AI/API/network call is needed for Personal Match. All calculations happen locally.
-- Existing V1.8.0 My Skin, Quick Find, Scan, Compare, Expiry, Batch Assisted Import, IndexedDB, and encrypted backup behavior is preserved.
+- Existing V1.8.0 My Skin, Quick Find, Scan, Expiry, Batch Assisted Import, IndexedDB, encrypted backup, and the underlying comparison algorithms are preserved.
 
 Beauty Cabinet V1.8.0 — My Skin Profile
 
@@ -58,7 +72,7 @@ Without the Worker, all normal Cabinet, Product Passport, Compare, Expiry, Scan 
 V1.7/V1.7.1 FEATURES PRESERVED
 - Cabinet and Product Passport
 - user product image + official/reference image
-- Similar & Overlap / Compare
+- Similar & Overlap relationship logic (the standalone Compare page was removed in V1.8.2)
 - Expiry / PAO
 - structured hue/undertone/saturation/depth/texture/finish/coverage/function fields
 - True Duplicate / Color Duplicate / Functional Duplicate / Complementary / Unique

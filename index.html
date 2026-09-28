@@ -12,16 +12,16 @@
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://*.workers.dev; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
   <meta name="beauty-ai-endpoint" content="">
-  <link rel="manifest" href="manifest.webmanifest?v=1810">
-  <link rel="stylesheet" href="styles.css?v=1810">
-  <title>Beauty Cabinet V1.8.1 Personal Match</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1820">
+  <link rel="stylesheet" href="styles.css?v=1820">
+  <title>Beauty Cabinet V1.8.2 Relationships</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.8.1 · Personal Match + My Skin + Quick Find</div>
+    <div class="sub">V1.8.2 · Relationships + Personal Match + My Skin</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -95,19 +95,6 @@
     <div id="scanRoot"></div>
   </section>
 
-  <section id="compare" hidden>
-    <div class="card">
-      <div class="title"><h3>Similar & Overlap</h3></div>
-      <div class="note">选择 2–4 件产品，在本机综合结构化属性与文字记录。结果区分 True Duplicate、Color Duplicate、Functional Duplicate、Complementary 和 Unique。</div>
-      <div class="relation-legend" aria-label="关系类型说明">
-        <span class="legend-true">True Duplicate</span><span class="legend-color">Color Duplicate</span><span class="legend-functional">Functional Duplicate</span><span class="legend-complementary">Complementary</span><span class="legend-unique">Unique</span>
-      </div>
-      <div id="comparePicker" class="compare-picker"></div>
-      <button id="runCompareBtn" type="button" disabled>比较所选产品</button>
-    </div>
-    <div id="compareResult"></div>
-  </section>
-
   <section id="expiry" hidden>
     <div class="card"><div class="title"><h3>Expiry & Check</h3></div><div id="expiryList"></div></div>
   </section>
@@ -154,7 +141,7 @@
         <div>Network</div><div>默认不上传；仅在当前扫描逐次确认后可访问同源安全代理</div>
         <div>AI Identification</div><div id="aiConfigStatus">OFF · secure proxy not configured</div>
         <div>Local Detection</div><div>本机压缩、候选区域、裁剪、颜色与配对建议</div>
-        <div>Version</div><div>V1.8.1</div>
+        <div>Version</div><div>V1.8.2</div>
       </div>
       <div class="card inset-card top-gap">
         <b>AI Recognition proxy（可选）</b>
@@ -174,7 +161,6 @@
   <button class="active" data-tab="home" type="button">Today</button>
   <button data-tab="cabinet" type="button">Cabinet</button>
   <button data-tab="scan" type="button">Scan</button>
-  <button data-tab="compare" type="button">Compare</button>
   <button data-tab="expiry" type="button">Expiry</button>
   <button data-tab="profile" type="button">My Skin</button>
   <button data-tab="settings" type="button">Privacy</button>
@@ -184,6 +170,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=1810" defer></script>
+<script src="app.js?v=1820" defer></script>
 </body>
 </html>

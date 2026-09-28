@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.8.2';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -582,7 +582,6 @@ function tab(id) {
   $$('main > section').forEach(s=>s.hidden=s.id!==id);
   $$('nav button[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===id));
   window.scrollTo({top:0,behavior:'auto'});
-  if(id==='compare') renderComparePicker();
   if(id==='scan') renderScanShelf();
   if(id==='profile'){renderSkinProfile();renderPersonalRecommendations();}
 }
@@ -599,7 +598,7 @@ function attentionInfo(p) {
   if (!p.opened && p.form === 'Cream') return {level:'warn',label:'年龄未知 · 定期检查'};
   return {level:'good',label:'状态检查管理'};
 }
-function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();renderQuickFindResults();renderSkinProfile();renderPersonalRecommendations();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
+function renderAll(){renderHome();renderProducts();renderExpiry();renderScanShelf();renderQuickFindResults();renderSkinProfile();renderPersonalRecommendations();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
 function renderHome(){
   $('#count').textContent=products.length;
   $('#imageCount').textContent=new Set(products.flatMap(productImageIds)).size;
@@ -619,14 +618,6 @@ function renderExpiry(){
   const rank={bad:0,warn:1,good:2}; const sorted=[...products].sort((a,b)=>rank[attentionInfo(a).level]-rank[attentionInfo(b).level]);
   $('#expiryList').innerHTML=sorted.map(p=>{const x=attentionInfo(p);return `<div class="expiry-row"><button type="button" data-product-id="${esc(p.id)}"><b>${esc(p.name)}</b><div class="note">${esc(p.form||'')} · 开封：${esc(p.opened||'未知')} · PAO：${esc(p.pao?`${p.pao}M`:'未知')}</div></button><span class="expiry-tag ${x.level}">${esc(x.label)}</span></div>`}).join('');
 }
-function renderComparePicker(){
-  const picker=$('#comparePicker');
-  if(!products.length){picker.innerHTML='<div class="note">先录入至少两件产品。</div>';$('#runCompareBtn').disabled=true;return;}
-  picker.innerHTML=products.map(p=>{const imageId=imageSlots(p).primaryImageId;return `<label class="check-card"><input type="checkbox" class="compare-check" value="${esc(p.id)}">${imageId?`<img class="compare-thumb" alt="" data-image-id="${esc(imageId)}">`:''}<span><b>${esc(p.name)}</b><span class="note">${esc(p.cat||'')} · ${esc(p.shade||'')}</span></span></label>`;}).join('');
-  activateLazyImages();
-  updateCompareButton();
-}
-function updateCompareButton(){const n=$$('.compare-check:checked').length;$('#runCompareBtn').disabled=n<2||n>4;}
 function norm(v=''){
   return String(v).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/[\s_\-\/]+/g,' ').replace(/[^a-z0-9\u3400-\u9fff ]/g,'');
 }
@@ -921,65 +912,136 @@ async function runQuickFindPhoto(){
 }
 function quickFindDismiss(id){quickFindState.results=(quickFindState.results||[]).filter(r=>r.product.id!==id);if(quickFindState.selectedId===id)quickFindState.selectedId='';renderQuickFindResults();}
 function categoryFamily(cat=''){
-  const c=norm(cat);
-  if(['foundation','concealer','primer','powder'].includes(c))return 'base';
-  if(['blush','highlighter','bronzer'].includes(c))return 'cheek';
-  if(['eyeshadow','mascara','liquid eyeliner'].includes(c))return 'eye';
-  if(c==='lip')return 'lip'; if(c==='skincare')return 'skincare'; return c;
-}
-function isComplementaryPair(a,b){
-  const pair=[norm(a.cat),norm(b.cat)].sort().join('|');
-  return new Set(['blush|bronzer','blush|highlighter','bronzer|highlighter','concealer|foundation','concealer|powder','eyeshadow|liquid eyeliner','eyeshadow|mascara','foundation|powder','foundation|primer','liquid eyeliner|mascara','primer|skincare']).has(pair);
+  const k=recCategory({cat});
+  if(['base','concealer','primer','powder','setting-spray'].includes(k))return 'base';
+  if(['blush','highlighter','bronzer','contour','face-palette'].includes(k))return 'cheek';
+  if(['eyeshadow','eyeliner','brow'].includes(k))return 'eye';
+  if(k==='lip')return 'lip';
+  if(k==='skincare')return 'skincare';
+  return k;
 }
 const ATTRIBUTE_FIELDS=[['色相','hue'],['冷暖调','undertone'],['饱和度','saturation'],['深浅','depth'],['质感','texture'],['妆效','finish'],['遮盖力','coverage'],['功能','function']];
 function attributeValue(p,key){return String(p?.attributes?.[key]||'').trim();}
 function attributeSimilarity(a,b,keys){let compared=0,matched=0;for(const key of keys){const av=norm(attributeValue(a,key)),bv=norm(attributeValue(b,key));if(av&&bv){compared++;if(av===bv)matched++;}}return compared?matched/compared:0;}
 const DIFFERENCE_FIELDS=[['品牌',p=>p.brand],['产品名',p=>p.name],['类别',p=>p.cat],['颜色/色号',p=>p.shade],['质地',p=>p.form],['适配',p=>p.fit],['用途/搭配',p=>p.role],...ATTRIBUTE_FIELDS.map(([label,key])=>[label,p=>attributeValue(p,key)]),['状态',p=>p.status]];
-function analyzeRelation(a,b){
-  const sameBrand=norm(a.brand)&&norm(a.brand)===norm(b.brand);
-  const nameSim=textSimilarity(a.name,b.name),shadeSim=textSimilarity(a.shade,b.shade),roleSim=textSimilarity(a.role,b.role);
-  const sameCat=norm(a.cat)&&norm(a.cat)===norm(b.cat),sameForm=norm(a.form)&&norm(a.form)===norm(b.form);
-  const sameFamily=categoryFamily(a.cat)&&categoryFamily(a.cat)===categoryFamily(b.cat);
-  const colorScore=attributeSimilarity(a,b,['hue','undertone','saturation','depth']),functionScore=attributeSimilarity(a,b,['texture','finish','coverage','function']);
-  let kind='unique',label='Unique',score=Math.round(12+22*Math.max(nameSim,shadeSim,roleSim,colorScore,functionScore));
-  let summary='结构化属性与文字记录没有显示明确重复或互补关系。';
-  if(((sameBrand&&nameSim>=.82)||(nameSim===1&&sameCat))&&(shadeSim>=.82||colorScore>=.75)){
-    kind='true';label='True Duplicate';score=96;summary='品牌/产品身份与色号高度一致，最可能是真正重复。';
-  }else if(sameCat&&(shadeSim>=.65||colorScore>=.6)){
-    kind='color';label='Color Duplicate';score=Math.round(75+Math.max(shadeSim,colorScore)*15);summary='类别与结构化颜色属性高度重合；差别主要在质地、品牌或使用感。';
-  }else if(isComplementaryPair(a,b)){
-    kind='complementary';label='Complementary';score=78;summary='两件产品承担不同但可组合的步骤，更像互补搭配而不是重复。';
-  }else if(sameCat||(sameFamily&&(sameForm||roleSim>=.34||functionScore>=.5))){
-    kind='functional';label='Functional Duplicate';score=Math.round(65+(sameForm?8:0)+(roleSim>=.34?7:0)+functionScore*12);summary='功能、质感或使用位置接近，但颜色、妆效或具体用途存在差异。';
-  }
-  const shared=[]; const differences=[];
-  for(const [title,get] of DIFFERENCE_FIELDS){
-    const av=String(get(a)||'').trim(),bv=String(get(b)||'').trim();
-    if(av&&bv&&norm(av)===norm(bv)) shared.push(`${title}：${av}`);
-    else if(av||bv) differences.push({title,a:av||'未记录',b:bv||'未记录'});
-  }
-  if(imageSlots(a).userImageId&&imageSlots(b).userImageId)shared.push('两件都有实物图');
-  return {kind,label,score:Math.min(99,score),summary,shared,differences,signals:{name:nameSim,shade:shadeSim,color:colorScore,function:functionScore}};
+const REL_COLOR_GROUPS={
+  orange:['orange','coral','peach','tangerine','terracotta','copper','橙','橘','桃橙','珊瑚','砖橙'],
+  mauve:['mauve','dusty rose','smoky rose','rosewood','plum','berry','wine','burgundy','greige','灰粉','灰玫瑰','玫瑰木','灰紫','梅子','莓','酒红'],
+  pink:['pink','rose','rosy','粉','玫瑰'],
+  red:['red','ruby','carmine','crimson','scarlet','红','胭脂'],
+  brown:['brown','beige','nude','taupe','toffee','coffee','cocoa','棕','裸','咖啡','灰棕'],
+  olive:['olive','khaki','green','teal','橄榄','卡其','绿色','蓝绿'],
+  gold:['gold','champagne','bronze','金','香槟','古铜'],
+  purple:['purple','violet','plum','紫','紫红'],
+  neutral:['neutral','grey','gray','taupe','greige','中性','灰']
+};
+function relationText(p){return norm([recDescriptorText(p),p?.fit,p?.myResult,p?.role,p?.notes].filter(Boolean).join(' '));}
+function relationColorSet(p){const t=relationText(p),set=new Set();for(const [k,terms] of Object.entries(REL_COLOR_GROUPS))if(recHas(t,terms))set.add(k);return set;}
+function setOverlap(a,b){if(!a.size||!b.size)return 0;let hit=0;for(const x of a)if(b.has(x))hit++;return hit/Math.max(a.size,b.size);}
+function toneCompatibility(a,b){
+  const av=norm(attributeValue(a,'undertone')),bv=norm(attributeValue(b,'undertone'));if(!av||!bv)return .45;if(av===bv)return 1;if(av.includes('neutral')||bv.includes('neutral'))return .72;return .28;
 }
-async function runCompare(){
-  const ids=$$('.compare-check:checked').map(x=>x.value);
-  const ps=ids.map(id=>products.find(p=>p.id===id)).filter(Boolean);
-  if(ps.length<2||ps.length>4)return;
-  let html='<div class="card"><div class="title"><h3>比较结果</h3></div><div style="overflow:auto"><table class="compare"><tr><th>维度</th>'+ps.map(p=>`<th>${esc(p.name)}</th>`).join('')+'</tr>';
-  const rows=[['品牌',p=>p.brand],['类别',p=>p.cat],['颜色/色号',p=>p.shade],['质地',p=>p.form],...ATTRIBUTE_FIELDS.map(([label,key])=>[label,p=>attributeValue(p,key)]),['适配',p=>p.fit],['用途/搭配',p=>p.role],['本地图',p=>{const s=imageSlots(p);return [s.userImageId?'实物图':'',s.officialImageId?'官方/网上图':''].filter(Boolean).join(' + ');}],['状态',p=>p.status]];
-  rows.forEach(([label,get])=>{html+=`<tr><td>${label}</td>${ps.map(p=>`<td>${esc(get(p)||'未记录')}</td>`).join('')}</tr>`}); html+='</table></div></div>';
-  const relationshipRecords=[];
-  for(let i=0;i<ps.length;i++)for(let j=i+1;j<ps.length;j++){
-    const r=analyzeRelation(ps[i],ps[j]);
-    const pair=[ps[i].id,ps[j].id].sort();relationshipRecords.push({id:pair.join('::'),productIds:pair,kind:r.kind,label:r.label,score:r.score,signals:r.signals,updatedAt:new Date().toISOString()});
-    html+=`<article class="relationship relation-${esc(r.kind)}"><div class="relationship-head"><b>${esc(ps[i].name)} ↔ ${esc(ps[j].name)}</b><span class="relation-badge">${esc(r.label)} · ${r.score}%</span></div><p class="note">${esc(r.summary)}</p>`;
-    if(r.shared.length)html+=`<div class="relation-section"><b>共同点</b><div>${r.shared.map(x=>`<span class="match-chip">${esc(x)}</span>`).join('')}</div></div>`;
-    if(r.differences.length)html+=`<div class="relation-section"><b>差异</b><div class="difference-list">${r.differences.map(d=>`<div><span>${esc(d.title)}</span><span>${esc(d.a)} ↔ ${esc(d.b)}</span></div>`).join('')}</div></div>`;
-    else html+='<div class="relation-section"><b>差异</b><p class="note">已记录维度中没有发现差异。</p></div>';
-    html+='</article>';
+function gradedAttributeSimilarity(a,b,key){const av=norm(attributeValue(a,key)),bv=norm(attributeValue(b,key));if(!av||!bv)return .45;if(av===bv)return 1;return .35;}
+function colorSimilarity(a,b){
+  const concept=setOverlap(relationColorSet(a),relationColorSet(b));
+  const hue=gradedAttributeSimilarity(a,b,'hue'),tone=toneCompatibility(a,b),sat=gradedAttributeSimilarity(a,b,'saturation'),depth=gradedAttributeSimilarity(a,b,'depth');
+  return Math.max(attributeSimilarity(a,b,['hue','undertone','saturation','depth']),concept*.55+hue*.2+tone*.12+sat*.07+depth*.06);
+}
+function textureSimilarity(a,b){return Math.max(attributeSimilarity(a,b,['texture','finish','coverage','function']),norm(a.form)&&norm(a.form)===norm(b.form)?1:.25);}
+function productIdentitySimilarity(a,b){
+  const sameBrand=norm(a.brand)&&norm(a.brand)===norm(b.brand),nameSim=textSimilarity(a.name,b.name),shadeSim=textSimilarity(a.shade,b.shade);
+  return Math.min(1,(sameBrand?.22:0)+nameSim*.5+shadeSim*.28);
+}
+function analyzeRelation(a,b){
+  const kindA=recCategory(a),kindB=recCategory(b),sameKind=kindA===kindB&&kindA!=='other',sameFamily=categoryFamily(a.cat)&&categoryFamily(a.cat)===categoryFamily(b.cat);
+  const identity=productIdentitySimilarity(a,b),nameSim=textSimilarity(a.name,b.name),shadeSim=textSimilarity(a.shade,b.shade),roleSim=textSimilarity(a.role,b.role),colorScore=colorSimilarity(a,b),functionScore=textureSimilarity(a,b);
+  let kind='unique',label='Unique',score=Math.round(15+25*Math.max(identity,colorScore,functionScore,roleSim)),summary='没有发现明显重复。';
+  if((identity>=.78&&shadeSim>=.68)||(norm(a.brand)===norm(b.brand)&&nameSim>=.9&&shadeSim>=.82)){
+    kind='true';label='True Duplicate';score=Math.round(92+Math.min(7,shadeSim*7));summary='品牌/产品身份与色号高度一致，最可能是真正重复。';
+  }else if(sameKind&&colorScore>=.66){
+    kind='color';label='Color Duplicate';score=Math.round(72+colorScore*20);summary='颜色与用途高度重合，但品牌、质地或妆效仍可能不同。';
+  }else if(sameKind||(sameFamily&&(functionScore>=.5||roleSim>=.32))){
+    kind='functional';label='Functional Duplicate';score=Math.round(60+(sameKind?10:4)+functionScore*18+roleSim*8);summary='承担相近功能，但颜色、质地或妆效存在明显差异。';
   }
-  $('#compareResult').innerHTML=html;
-  try{await Promise.all(relationshipRecords.map(r=>idbPut('relationships',r)));}catch(e){console.warn('relationship persistence skipped',e);}
+  const shared=[],differences=[];
+  for(const [title,get] of DIFFERENCE_FIELDS){const av=String(get(a)||'').trim(),bv=String(get(b)||'').trim();if(av&&bv&&norm(av)===norm(bv))shared.push(`${title}：${av}`);else if(av||bv)differences.push({title,a:av||'未记录',b:bv||'未记录'});}
+  return {kind,label,score:Math.min(99,score),summary,shared,differences,signals:{identity,name:nameSim,shade:shadeSim,color:colorScore,function:functionScore}};
+}
+function goodCandidateWeight(p){const r=personalRecommendation(p);if(p.status==='停止使用'||attentionInfo(p).level==='bad')return -35;if(r.tier==='low')return -18;if(r.tier==='caution')return -9;if(r.tier==='excellent')return 10;if(r.tier==='good')return 6;return 0;}
+function isMutedBalancer(p){const t=relationText(p);return recHas(t,['mauve','dusty rose','smoky rose','rosewood','taupe','greige','grey','gray','plum','berry','wine','burgundy','neutral','cool','灰粉','灰玫瑰','玫瑰木','灰棕','灰紫','莓','酒红','中性']);}
+function isWarmAccent(p){const t=relationText(p),u=norm(attributeValue(p,'undertone'));return u.includes('warm')||recHas(t,['orange','coral','peach','tangerine','terracotta','copper','gold','orange red','橙','橘','桃','珊瑚','铜','金']);}
+function isLiplinerProduct(p){return recHas(norm([p.cat,p.name,p.form].join(' ')),['lipliner','lip liner','唇线']);}
+function sameToneFamily(a,b){return colorSimilarity(a,b)>=.52||setOverlap(relationColorSet(a),relationColorSet(b))>=.5;}
+function pairingScore(target,candidate){
+  const a=recCategory(target),b=recCategory(candidate);let score=0,reasons=[];
+  const add=(n,r)=>{score+=n;if(r)reasons.push(r);};
+  const combos={
+    blush:{highlighter:24,bronzer:15,contour:17,lip:13,eyeshadow:8},
+    highlighter:{blush:24,bronzer:14,contour:14,base:8},
+    bronzer:{blush:18,highlighter:14,contour:8},
+    contour:{blush:20,highlighter:14,bronzer:8},
+    lip:{blush:18,eyeshadow:13,eyeliner:8,lip:4},
+    eyeshadow:{eyeliner:24,brow:6,highlighter:6,eyeshadow:5,lip:8},
+    eyeliner:{eyeshadow:24,brow:7},
+    base:{primer:25,concealer:22,powder:22,'setting-spray':12},
+    primer:{base:25,powder:10},
+    concealer:{base:22,powder:18,primer:8},
+    powder:{base:22,concealer:18,primer:10,'setting-spray':10},
+    'setting-spray':{base:10,powder:10},
+    brow:{eyeshadow:8,eyeliner:7}
+  };
+  if(combos[a]?.[b])add(combos[a][b],`步骤互补：${recCategoryLabel(a)} + ${recCategoryLabel(b)}`);
+  if(a==='lip'&&b==='lip'&&isLiplinerProduct(candidate)){add(28,'唇线可直接配合这支唇部产品');if(sameToneFamily(target,candidate))add(14,'色调接近，适合勾勒和打底');}
+  if(a==='lip'&&b==='blush'&&sameToneFamily(target,candidate))add(15,'唇色与腮红色调呼应');
+  if(a==='blush'&&b==='lip'&&sameToneFamily(target,candidate))add(13,'腮红与唇色属于相近色系');
+  if(['blush','lip','eyeshadow'].includes(a)&&isWarmAccent(target)&&isMutedBalancer(candidate)){add(18,'可降低本品的暖橙感，让整体更适合 muted olive');}
+  if(a==='highlighter'&&recHas(relationText(candidate),['pink','rose','neutral','champagne','粉','玫瑰','中性','香槟']))add(8,'与中性/粉调光泽更协调');
+  if(a==='eyeshadow'&&b==='eyeliner'&&recHas(relationText(candidate),['brown','olive','grey','gray','black','棕','橄榄','灰','黑']))add(8,'适合作为睫毛根部的结构线');
+  if(a==='base'&&b==='powder'&&recHas(relationText(candidate),['matte','oil','sebum','控油']))add(7,'可用于 T 区定妆与控油');
+  score+=goodCandidateWeight(candidate);
+  if(candidate.id===target.id)return {score:-999,reasons:[]};
+  if(score>0&&personalRecommendation(candidate).tier==='excellent')reasons.push('这件产品本身对你的适配度也较高');
+  return {score,reasons:[...new Set(reasons)].slice(0,3)};
+}
+function rescueScore(target,candidate){
+  if(!isWarmAccent(target)||candidate.id===target.id)return {score:-999,reasons:[]};
+  const a=recCategory(target),b=recCategory(candidate),muted=isMutedBalancer(candidate);let score=0,reasons=[];
+  const add=(n,r)=>{score+=n;if(r)reasons.push(r);};
+  if(a==='blush'&&b==='blush'&&muted){add(55,'同为腮红，可直接混色/叠加压低橙感');reasons.push('建议先从“本品 1 : 这件 2–3”开始');}
+  if(a==='lip'&&b==='lip'&&isLiplinerProduct(candidate)&&muted){add(52,'用偏灰/玫瑰木唇线打底，可压低暖橙感');}
+  if(a==='lip'&&b==='blush'&&muted){add(38,'用低饱和 mauve / 灰玫瑰腮红平衡暖唇色');}
+  if(a==='eyeshadow'&&b==='eyeshadow'&&muted){add(48,'用 taupe / 灰棕 / mauve 作大面积打底，再把暖色限制在局部');}
+  if(a==='eyeshadow'&&b==='eyeliner'&&muted){add(28,'用中性/灰棕/橄榄眼线压住过暖的整体观感');}
+  if(a==='bronzer'&&b==='blush'&&muted){add(36,'用 mauve / 灰玫瑰腮红抵消过强的黄橙感');}
+  if(['blush','bronzer'].includes(a)&&b==='highlighter'&&recHas(relationText(candidate),['pink','neutral','champagne','粉','中性','香槟']))add(22,'选择中性/粉调高光，避免继续增加金黄色');
+  if(a==='highlighter'&&b==='highlighter'&&recHas(relationText(candidate),['pink','rose','neutral','champagne','粉','玫瑰','中性','香槟']))add(42,'用更中性/粉调的高光替代或少量叠加，降低过强黄金感');
+  if(score>0)score+=goodCandidateWeight(candidate);
+  return {score,reasons:[...new Set(reasons)].slice(0,3)};
+}
+function relationshipInsights(p){
+  const duplicates=[],pairings=[],rescues=[];
+  for(const q of products){if(q.id===p.id)continue;
+    const rel=analyzeRelation(p,q);if(['true','color','functional'].includes(rel.kind)&&rel.score>=63)duplicates.push({product:q,relation:rel,score:rel.score});
+    const pair=pairingScore(p,q);if(pair.score>=16)pairings.push({product:q,score:Math.round(pair.score),reasons:pair.reasons});
+    const rescue=rescueScore(p,q);if(rescue.score>=18)rescues.push({product:q,score:Math.round(rescue.score),reasons:rescue.reasons});
+  }
+  duplicates.sort((a,b)=>b.score-a.score);pairings.sort((a,b)=>b.score-a.score);rescues.sort((a,b)=>b.score-a.score);
+  const dedupe=(arr,limit)=>{const seen=new Set();return arr.filter(x=>{if(seen.has(x.product.id))return false;seen.add(x.product.id);return true;}).slice(0,limit);};
+  const needsRescue=['blush','lip','eyeshadow','bronzer','highlighter'].includes(recCategory(p))&&isWarmAccent(p);
+  return {duplicates:dedupe(duplicates,6),pairings:dedupe(pairings,6),rescues:dedupe(rescues,5),needsRescue};
+}
+function relationDifferenceSummary(target,item){const r=item.relation;if(!r)return '';const diffs=r.differences||[];const priority=['质地','妆效','颜色/色号','品牌','适配'];const parts=[];for(const key of priority){const d=diffs.find(x=>x.title===key);if(d)parts.push(`${key}：${d.a} ↔ ${d.b}`);if(parts.length===2)break;}return parts.join('；')||r.summary;}
+function relationshipProductCard(target,item,type){
+  const q=item.product,img=imageSlots(q).primaryImageId;let badge='',body='';
+  if(type==='duplicate'){badge=`${item.relation.label} · ${item.score}%`;body=relationDifferenceSummary(target,item);}
+  else {badge=type==='rescue'?'Rescue':'Works With';body=(item.reasons||[]).join('；');}
+  return `<article class="auto-relation-item"><button type="button" class="auto-relation-main" data-related-product="${esc(q.id)}">${img?`<img alt="" data-image-id="${esc(img)}">`:'<span class="auto-relation-img placeholder">✦</span>'}<span class="auto-relation-copy"><b>${esc(q.brand?`${q.brand} · `:'')}${esc(q.name)}</b><small>${esc(q.shade||q.cat||'')}</small><em>${esc(body)}</em></span><span class="relation-badge">${esc(badge)}</span></button></article>`;
+}
+function relationshipSectionsHTML(p,insights=relationshipInsights(p)){
+  const dup=insights.duplicates.length?insights.duplicates.map(x=>relationshipProductCard(p,x,'duplicate')).join(''):'<p class="note">当前库存里没有发现明显重复产品。</p>';
+  const pair=insights.pairings.length?insights.pairings.map(x=>relationshipProductCard(p,x,'pair')).join(''):'<p class="note">目前没有足够信息生成具体搭配；补充产品属性或实际使用反馈后会更准确。</p>';
+  const rescue=insights.needsRescue?`<div class="relationship-auto-block rescue-block"><div class="relationship-auto-head"><div><b>这个暖色怎么救</b><span>从你自己的 Cabinet 里找具体平衡产品</span></div></div>${insights.rescues.length?insights.rescues.map(x=>relationshipProductCard(p,x,'rescue')).join(''):'<p class="note">暂时没有找到足够合适的低饱和/中性平衡产品。以后录入 mauve、灰玫瑰、taupe 等产品后会自动出现。</p>'}</div>`:'';
+  return `<div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Similar & Duplicates</b><span>自动扫描整个 Cabinet，不需要手动 Compare</span></div><span class="status-badge">LOCAL</span></div>${dup}</div><div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Works Best With · 和什么搭</b><span>按类别、颜色、质地和你的适配记录自动推荐</span></div><span class="status-badge">LOCAL</span></div>${pair}</div>${rescue}`;
 }
 
 function openModal(html){$('#modalBody').innerHTML=html;$('#modal').classList.add('open');$('#modal').setAttribute('aria-hidden','false');document.body.style.overflow='hidden';}
@@ -1035,6 +1097,7 @@ async function showProduct(id){
     ${p.officialImageUrl?`<div class="source-record"><b>图片来源网址（仅本地文字记录）</b><div>${esc(p.officialImageUrl)}</div></div>`:''}
     <p>${p.shade?`<span class="pill">${esc(p.shade)}</span>`:''}${p.fit?`<span class="pill">${esc(p.fit)}</span>`:''}<span class="pill ${info.level}">${esc(info.label)}</span></p>
     ${recommendationCardHTML(p)}
+    ${relationshipSectionsHTML(p)}
     <div class="card"><b>你的手工记录</b><p><b>怎么用：</b> ${esc(p.role||'尚未记录适配和搭配说明。')}</p>${p.fit?`<p><b>适配：</b> ${esc(p.fit)}</p>`:''}${p.myResult?`<div class="actual-result"><b>我的实际结果</b><p>${esc(p.myResult)}</p></div>`:''}</div>
     <div class="card"><b>Product Passport</b><div class="kv"><div>品牌</div><div>${esc(p.brand||'未记录')}</div><div>生产日期</div><div>${esc(p.made||'未记录')}</div><div>购买日期</div><div>${esc(p.bought||'未记录')}</div><div>开封日期</div><div>${esc(p.opened||'未知')}</div><div>PAO</div><div>${esc(p.pao?`${p.pao} 个月`:'待录入')}</div><div>状态</div><div>${esc(p.status||'正常')}</div></div></div>
     ${attrRows?`<div class="card"><b>Structured Attributes</b><div class="kv top-gap">${attrRows}</div></div>`:''}
@@ -1453,7 +1516,6 @@ function bindEvents(){
   $('#clearBtn').addEventListener('click',clearAllData);
   if($('#saveAiEndpointBtn'))$('#saveAiEndpointBtn').addEventListener('click',async()=>{try{await saveAiEndpoint($('#aiEndpointInput').value);renderAll();toast(aiProxyEndpoint?'AI endpoint 已保存到本机':'AI endpoint 已关闭');}catch(e){alert(e.message||'AI endpoint 无效');}});
   if($('#clearAiEndpointBtn'))$('#clearAiEndpointBtn').addEventListener('click',async()=>{await saveAiEndpoint('');renderAll();toast('AI endpoint 已关闭');});
-  $('#runCompareBtn').addEventListener('click',runCompare);
   document.addEventListener('click',async e=>{
     const t=e.target.closest('button[data-tab]');if(t){tab(t.dataset.tab);return;}
     const mode=e.target.closest('[data-scan-mode]');if(mode){await startScanMode(mode.dataset.scanMode);return;}
@@ -1470,12 +1532,12 @@ function bindEvents(){
     const qfDismiss=e.target.closest('[data-qf-dismiss]');if(qfDismiss){quickFindDismiss(qfDismiss.dataset.qfDismiss);return;}
     if(e.target.closest('[data-qf-none]')){quickFindState.results=[];quickFindState.selectedId='';quickFindState.status='这些候选都不是。可以换关键词/照片，或新建产品。';renderQuickFindResults();return;}
     if(e.target.closest('[data-qf-new]')){openProductForm();return;}
+    const related=e.target.closest('[data-related-product]');if(related){showProduct(related.dataset.relatedProduct);return;}
     const p=e.target.closest('[data-product-id]');if(p&&!p.closest('#productForm')){showProduct(p.dataset.productId);return;}
     const a=e.target.closest('[data-action]');if(a){const id=a.dataset.id;if(a.dataset.action==='edit')openProductForm(products.find(x=>x.id===id));if(a.dataset.action==='delete')deleteProduct(id);return;}
     if(e.target===$('#modal'))closeModal();
   });
   document.addEventListener('change',async e=>{
-    if(e.target.classList.contains('compare-check'))updateCompareButton();
     if(e.target.matches('[data-scan-input]')){await addScanFiles(e.target.dataset.scanInput,e.target.files||[]);e.target.value='';}
     if(e.target.matches('[data-candidate-accept]')){const session=activeScan(),candidate=session?.candidates.find(c=>c.id===e.target.dataset.candidateAccept);if(candidate){candidate.accepted=e.target.checked;await saveScanSession(session);}}
     if(e.target.matches('[data-candidate-extra]')){const file=e.target.files?.[0];if(file)await addCandidateExtra(e.target.dataset.candidateExtra,file);e.target.value='';}
