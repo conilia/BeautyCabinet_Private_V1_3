@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.7.5';
+const APP_VERSION = '1.8.0';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -19,6 +19,82 @@ function normalizeAiEndpoint(raw=''){
 async function loadAiEndpoint(){const rec=await idbGet('settings','aiEndpoint');aiProxyEndpoint=normalizeAiEndpoint(rec?.value||DEFAULT_AI_PROXY_ENDPOINT);}
 async function saveAiEndpoint(value){const normalized=normalizeAiEndpoint(value);if(value&& !normalized)throw new Error('AI endpoint must be same-origin, localhost, or an HTTPS *.workers.dev URL.');await idbPut('settings',{key:'aiEndpoint',value:normalized});aiProxyEndpoint=normalized;return normalized;}
 
+
+const SKIN_CONCERN_LABELS={
+  visible_pores:'毛孔明显', sebaceous_filaments:'皮脂丝', closed_comedones:'闭口', acne_prone:'易长痘',
+  redness:'泛红', dehydration:'缺水/紧绷', flaking:'起皮', pigmentation:'色沉/肤色不均'
+};
+const SKIN_VALUE_LABELS={
+  depth:{very_fair:'Very Fair',fair:'Fair',light:'Light',light_medium:'Light–Medium',medium:'Medium',medium_deep:'Medium–Deep',deep:'Deep'},
+  undertone:{cool:'Cool',neutral_cool:'Neutral-Cool',neutral:'Neutral',neutral_warm:'Neutral-Warm',warm:'Warm',unknown:'未确定'},
+  oliveLevel:{none:'无 Olive',subtle:'轻微 Olive',moderate:'明显 Olive',strong:'强 Olive',unknown:'未确定'},
+  saturation:{muted:'Muted / 低饱和',neutral:'中等饱和',clear:'Clear / 高净度',unknown:'未确定'},
+  skinType:{dry:'干性',normal:'中性',combination:'混合性',oily:'油性',unknown:'未确定'},
+  zone:{dry:'偏干',slightly_dry:'微干',normal:'正常',oily:'偏油',very_oily:'明显出油',unknown:'未确定'},
+  sensitivity:{none:'不敏感',mild:'轻度敏感',moderate:'中度敏感',high:'高度敏感',unknown:'未确定'},
+  eyelidType:{monolid:'单眼皮',inner_double:'内双',hooded:'Hooded',inner_double_hooded:'内双 / Hooded',double:'双眼皮',unknown:'未确定'},
+  baseFinish:{matte:'Matte',natural:'Natural',satin:'Satin',dewy:'Dewy',no_preference:'无固定偏好'},
+  coverage:{sheer:'Sheer',light:'Light',medium:'Medium',full:'Full',no_preference:'无固定偏好'}
+};
+function emptySkinProfile(){return {version:1,depth:'',undertone:'',oliveLevel:'',saturation:'',skinType:'',zones:{tZone:'',cheeks:'',chin:'',underEye:''},sensitivity:'',concerns:[],eye:{eyelidType:'',eyelidOiliness:'',eyeSensitivity:''},makeup:{baseFinish:'',coverage:''},notes:'',updatedAt:''};}
+function normalizeSkinProfile(raw={}){
+  const base=emptySkinProfile(),obj=(raw&&typeof raw==='object')?raw:{};
+  return {...base,...obj,zones:{...base.zones,...(obj.zones||{})},eye:{...base.eye,...(obj.eye||{})},makeup:{...base.makeup,...(obj.makeup||{})},concerns:Array.isArray(obj.concerns)?obj.concerns.filter(x=>SKIN_CONCERN_LABELS[x]):[],notes:String(obj.notes||''),updatedAt:String(obj.updatedAt||'')};
+}
+async function loadSkinProfile(){const rec=await idbGet('settings','skinProfile');skinProfile=normalizeSkinProfile(rec?.value||{});}
+async function saveSkinProfile(profile){skinProfile=normalizeSkinProfile(profile);skinProfile.updatedAt=new Date().toISOString();await idbPut('settings',{key:'skinProfile',value:skinProfile,updatedAt:skinProfile.updatedAt});renderSkinProfile();}
+function skinLabel(group,value){return value?(SKIN_VALUE_LABELS[group]?.[value]||value):'未记录';}
+function skinProfileCompleteness(p=skinProfile){if(!p)return 0;const fields=[p.depth,p.undertone,p.oliveLevel,p.saturation,p.skinType,p.zones?.tZone,p.zones?.cheeks,p.sensitivity,p.eye?.eyelidType,p.eye?.eyelidOiliness,p.eye?.eyeSensitivity];return Math.round(fields.filter(Boolean).length/fields.length*100);}
+function renderSkinProfile(){
+  const root=$('#skinProfileSummary');if(!root)return;const p=normalizeSkinProfile(skinProfile||{}),complete=skinProfileCompleteness(p);
+  if(!complete&&!p.concerns.length&&!p.notes){root.innerHTML='<div class="empty-state profile-empty"><div class="empty-icon">🪞</div><b>还没有建立 My Skin 档案</b><p>先记录长期稳定的肤色、肤质和眼部特征。这里不要记录“今天突然爆痘”之类短期状态。</p></div>';return;}
+  const concerns=p.concerns.map(x=>`<span class="pill">${esc(SKIN_CONCERN_LABELS[x])}</span>`).join('')||'<span class="muted">未记录</span>';
+  root.innerHTML=`<div class="profile-completeness"><div><b>档案完整度 ${complete}%</b><span>${p.updatedAt?`最后更新 ${new Date(p.updatedAt).toLocaleDateString()}`:'尚未保存更新时间'}</span></div><div class="profile-meter"><i style="width:${complete}%"></i></div></div>
+    <div class="profile-grid">
+      <article><span>肤色</span><b>${esc(skinLabel('depth',p.depth))}</b><small>${esc(skinLabel('undertone',p.undertone))} · ${esc(skinLabel('oliveLevel',p.oliveLevel))} · ${esc(skinLabel('saturation',p.saturation))}</small></article>
+      <article><span>基础肤质</span><b>${esc(skinLabel('skinType',p.skinType))}</b><small>T区 ${esc(skinLabel('zone',p.zones.tZone))} · 两颊 ${esc(skinLabel('zone',p.zones.cheeks))}</small></article>
+      <article><span>敏感度</span><b>${esc(skinLabel('sensitivity',p.sensitivity))}</b><small>眼部 ${esc(skinLabel('sensitivity',p.eye.eyeSensitivity))}</small></article>
+      <article><span>眼部</span><b>${esc(skinLabel('eyelidType',p.eye.eyelidType))}</b><small>眼皮 ${esc(skinLabel('zone',p.eye.eyelidOiliness))}</small></article>
+    </div>
+    <div class="profile-concerns"><b>长期关注点</b><div>${concerns}</div></div>
+    ${p.makeup.baseFinish||p.makeup.coverage?`<div class="profile-concerns"><b>底妆偏好</b><div><span class="pill">${esc(skinLabel('baseFinish',p.makeup.baseFinish))}</span><span class="pill">${esc(skinLabel('coverage',p.makeup.coverage))}</span></div></div>`:''}
+    ${p.notes?`<div class="profile-notes"><b>备注</b><p>${esc(p.notes)}</p></div>`:''}`;
+}
+function optionHTML(value,label,current){return `<option value="${esc(value)}" ${current===value?'selected':''}>${esc(label)}</option>`;}
+function selectOptions(map,current,emptyLabel='请选择'){return `<option value="">${esc(emptyLabel)}</option>`+Object.entries(map).map(([v,l])=>optionHTML(v,l,current)).join('');}
+function openSkinProfileForm(){
+  const p=normalizeSkinProfile(skinProfile||{});
+  const concernBoxes=Object.entries(SKIN_CONCERN_LABELS).map(([value,label])=>`<label class="profile-check"><input type="checkbox" name="concerns" value="${esc(value)}" ${p.concerns.includes(value)?'checked':''}><span>${esc(label)}</span></label>`).join('');
+  openModal(`<h2>编辑 My Skin</h2><p class="note">记录长期稳定的 baseline。短期肤况（今天偏干、今天爆痘等）以后在 Today 中单独覆盖。</p><form id="skinProfileForm">
+    <div class="profile-form-section"><h3>肤色 / Undertone</h3>
+      <label>肤色深浅</label><select name="depth">${selectOptions(SKIN_VALUE_LABELS.depth,p.depth)}</select>
+      <label>基础 Undertone</label><select name="undertone">${selectOptions(SKIN_VALUE_LABELS.undertone,p.undertone)}</select>
+      <label>Olive 程度</label><select name="oliveLevel">${selectOptions(SKIN_VALUE_LABELS.oliveLevel,p.oliveLevel)}</select>
+      <label>整体饱和度</label><select name="saturation">${selectOptions(SKIN_VALUE_LABELS.saturation,p.saturation)}</select>
+    </div>
+    <div class="profile-form-section"><h3>肤质与区域差异</h3>
+      <label>基础肤质</label><select name="skinType">${selectOptions(SKIN_VALUE_LABELS.skinType,p.skinType)}</select>
+      <div class="profile-form-grid"><div><label>T 区</label><select name="tZone">${selectOptions(SKIN_VALUE_LABELS.zone,p.zones.tZone)}</select></div><div><label>两颊</label><select name="cheeks">${selectOptions(SKIN_VALUE_LABELS.zone,p.zones.cheeks)}</select></div><div><label>下巴</label><select name="chin">${selectOptions(SKIN_VALUE_LABELS.zone,p.zones.chin)}</select></div><div><label>眼下</label><select name="underEye">${selectOptions(SKIN_VALUE_LABELS.zone,p.zones.underEye)}</select></div></div>
+      <label>面部敏感度</label><select name="sensitivity">${selectOptions(SKIN_VALUE_LABELS.sensitivity,p.sensitivity)}</select>
+    </div>
+    <div class="profile-form-section"><h3>长期关注点</h3><div class="profile-check-grid">${concernBoxes}</div></div>
+    <div class="profile-form-section"><h3>眼部特征</h3>
+      <label>眼皮类型</label><select name="eyelidType">${selectOptions(SKIN_VALUE_LABELS.eyelidType,p.eye.eyelidType)}</select>
+      <label>眼皮出油</label><select name="eyelidOiliness">${selectOptions(SKIN_VALUE_LABELS.zone,p.eye.eyelidOiliness)}</select>
+      <label>眼部敏感度</label><select name="eyeSensitivity">${selectOptions(SKIN_VALUE_LABELS.sensitivity,p.eye.eyeSensitivity)}</select>
+    </div>
+    <div class="profile-form-section"><h3>底妆偏好（可选）</h3>
+      <label>喜欢的妆效</label><select name="baseFinish">${selectOptions(SKIN_VALUE_LABELS.baseFinish,p.makeup.baseFinish)}</select>
+      <label>常用遮盖度</label><select name="coverage">${selectOptions(SKIN_VALUE_LABELS.coverage,p.makeup.coverage)}</select>
+    </div>
+    <label>备注</label><textarea name="notes" placeholder="例如：某些官方色名在我脸上会偏橙；优先相信实际上脸结果。">${esc(p.notes)}</textarea>
+    <button class="full" type="submit">保存到本机</button>
+  </form>`);
+}
+async function handleSkinProfileSubmit(form){const fd=new FormData(form);await saveSkinProfile({version:1,depth:fd.get('depth'),undertone:fd.get('undertone'),oliveLevel:fd.get('oliveLevel'),saturation:fd.get('saturation'),skinType:fd.get('skinType'),zones:{tZone:fd.get('tZone'),cheeks:fd.get('cheeks'),chin:fd.get('chin'),underEye:fd.get('underEye')},sensitivity:fd.get('sensitivity'),concerns:fd.getAll('concerns'),eye:{eyelidType:fd.get('eyelidType'),eyelidOiliness:fd.get('eyelidOiliness'),eyeSensitivity:fd.get('eyeSensitivity')},makeup:{baseFinish:fd.get('baseFinish'),coverage:fd.get('coverage')},notes:String(fd.get('notes')||'').trim()});closeModal();toast('My Skin 已保存在本机');}
+async function importSkinProfileFile(file){try{const raw=JSON.parse(await file.text());if(raw?.format!=='beauty-cabinet-skin-profile'||raw?.version!==1||!raw.profile)throw new Error('invalid profile');await saveSkinProfile(raw.profile);toast('My Skin 档案已导入');}catch(e){console.error(e);alert('无法导入这份 Profile JSON。请确认文件来自 Beauty Cabinet My Skin。');}}
+async function resetSkinProfile(){if(!confirm('清空这台设备上的 My Skin 档案？产品库存不会受影响。'))return;skinProfile=emptySkinProfile();await idbDelete('settings','skinProfile');renderSkinProfile();toast('My Skin 档案已清空');}
+
 let db = null;
 let products = [];
 let scanSessions = [];
@@ -33,6 +109,7 @@ let quickFindPhotoFile = null;
 let quickFindPhotoImage = null;
 let quickFindCropRect = {x:0,y:0,width:100,height:100};
 let quickFindCropDrag = null;
+let skinProfile = null;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -353,6 +430,7 @@ function tab(id) {
   window.scrollTo({top:0,behavior:'auto'});
   if(id==='compare') renderComparePicker();
   if(id==='scan') renderScanShelf();
+  if(id==='profile') renderSkinProfile();
 }
 function attentionInfo(p) {
   if (p.status === '停止使用') return {level:'bad', label:'停止使用'};
@@ -367,7 +445,7 @@ function attentionInfo(p) {
   if (!p.opened && p.form === 'Cream') return {level:'warn',label:'年龄未知 · 定期检查'};
   return {level:'good',label:'状态检查管理'};
 }
-function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();renderQuickFindResults();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
+function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();renderQuickFindResults();renderSkinProfile();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
 function renderHome(){
   $('#count').textContent=products.length;
   $('#imageCount').textContent=new Set(products.flatMap(productImageIds)).size;
@@ -1196,6 +1274,10 @@ function bindEvents(){
   $('#homeAddBtn').addEventListener('click',()=>openProductForm());
   if($('#homeScanBtn'))$('#homeScanBtn').addEventListener('click',()=>tab('scan'));
   $('#addBtn').addEventListener('click',()=>openProductForm());
+  if($('#editSkinProfileBtn'))$('#editSkinProfileBtn').addEventListener('click',openSkinProfileForm);
+  if($('#importSkinProfileBtn'))$('#importSkinProfileBtn').addEventListener('click',()=>$('#skinProfileFile').click());
+  if($('#skinProfileFile'))$('#skinProfileFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importSkinProfileFile(f);e.target.value='';});
+  if($('#resetSkinProfileBtn'))$('#resetSkinProfileBtn').addEventListener('click',resetSkinProfile);
   if($('#quickFindText'))$('#quickFindText').addEventListener('input',e=>{clearTimeout(quickFindInputTimer);quickFindInputTimer=setTimeout(()=>runQuickFindText(e.target.value),120);});
   if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').addEventListener('change',async e=>{const f=e.target.files?.[0];if(f){try{await prepareQuickFindPhoto(f);}catch(err){console.error(err);toast('图片读取失败');}}e.target.value='';});
   if($('#quickFindClearBtn'))$('#quickFindClearBtn').addEventListener('click',clearQuickFind);
@@ -1241,7 +1323,7 @@ function bindEvents(){
     if(e.target.matches('[data-candidate-extra]')){const file=e.target.files?.[0];if(file)await addCandidateExtra(e.target.dataset.candidateExtra,file);e.target.value='';}
     if(e.target.matches('[data-ai-alternative]')){const session=activeScan(),candidate=session?.candidates.find(c=>c.id===e.target.dataset.aiAlternative),index=Number(e.target.value);if(candidate&&Number.isInteger(index)){applyAiAlternative(candidate,index);await saveScanSession(session);renderScanShelf();}}
   });
-  document.addEventListener('submit',e=>{if(e.target.id==='productForm'){e.preventDefault();handleProductSubmit(e.target);}if(e.target.id==='candidateForm'){e.preventDefault();saveCandidateForm(e.target);}});
+  document.addEventListener('submit',e=>{if(e.target.id==='productForm'){e.preventDefault();handleProductSubmit(e.target);}if(e.target.id==='candidateForm'){e.preventDefault();saveCandidateForm(e.target);}if(e.target.id==='skinProfileForm'){e.preventDefault();handleSkinProfileSubmit(e.target);}});
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 }
 
@@ -1251,6 +1333,7 @@ async function start(){
     await cleanupLegacyWebState();
     db=await openDB();
     await loadAiEndpoint();
+    await loadSkinProfile();
     bindEvents();
     try{if(navigator.storage?.persist) await navigator.storage.persist();}catch(e){}
     await reloadProducts();await reloadScanSessions();renderAll();

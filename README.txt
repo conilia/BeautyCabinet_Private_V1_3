@@ -1,3 +1,5 @@
+Beauty Cabinet V1.8.0 — My Skin Profile
+
 Beauty Cabinet V1.7.4 — improved multi-object Scan Shelf + optional real AI recognition
 
 WHAT IS FIXED IN V1.7.4
@@ -106,3 +108,5 @@ V1.7.5 Quick Find improvements:
 - Stronger local visual descriptor: dHash + aHash + spatial color grid + edge orientation + color/aspect features
 - Optional keyword + photo hybrid ranking
 - Shared group-photo detection/penalty to avoid false confidence when multiple items reuse the same batch photo
+
+V1.8.0 adds a local-only My Skin profile stored in IndexedDB settings and included automatically in encrypted backups. No personal profile values are hardcoded in the public app source.

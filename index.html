@@ -12,16 +12,16 @@
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://*.workers.dev; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
   <meta name="beauty-ai-endpoint" content="">
-  <link rel="manifest" href="manifest.webmanifest?v=1740">
-  <link rel="stylesheet" href="styles.css?v=1740">
-  <title>Beauty Cabinet V1.7.5 Quick Find</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1800">
+  <link rel="stylesheet" href="styles.css?v=1800">
+  <title>Beauty Cabinet V1.8.0 My Skin</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.7.5 · Semantic + Visual Quick Find</div>
+    <div class="sub">V1.8.0 · My Skin Profile + Quick Find</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -112,6 +112,33 @@
     <div class="card"><div class="title"><h3>Expiry & Check</h3></div><div id="expiryList"></div></div>
   </section>
 
+
+  <section id="profile" hidden>
+    <div class="card">
+      <div class="title"><div><h3>My Skin · 个人肤质肤色档案</h3><div class="note">这是长期基线档案，用于后续适配分析、妆容推荐和护肤 Routine。每日临时肤况会在 Today 模块中单独记录。</div></div><button id="editSkinProfileBtn" type="button">编辑档案</button></div>
+      <div class="profile-privacy">🔒 仅保存在本机 IndexedDB；不会写入 GitHub。加密 .beautybackup 会自动包含这份档案。</div>
+      <div id="skinProfileSummary"></div>
+    </div>
+    <div class="card">
+      <div class="title"><h3>档案工具</h3></div>
+      <div class="toolbar">
+        <button id="importSkinProfileBtn" class="secondary" type="button">导入本地 Profile JSON</button>
+        <button id="resetSkinProfileBtn" class="secondary" type="button">清空档案</button>
+      </div>
+      <input id="skinProfileFile" type="file" accept="application/json,.json" hidden>
+      <p class="note">Profile JSON 只在浏览器本机读取。换设备时更推荐使用现有的加密 <code>.beautybackup</code>，它会一起迁移产品、图片和 My Skin。</p>
+    </div>
+    <div class="card">
+      <div class="title"><h3>后续会怎样使用</h3><span class="status-badge">LOCAL</span></div>
+      <div class="profile-use-grid">
+        <div><b>产品适配</b><span>结合肤色深浅、undertone、olive 和 muted 程度解释“为什么适合/不适合”。</span></div>
+        <div><b>区域肤质</b><span>底妆/妆前不再只按“油皮/干皮”一刀切，而是考虑 T 区、两颊等区域差异。</span></div>
+        <div><b>眼部建议</b><span>为内双/hooded、眼皮出油和敏感眼选择更合理的眼妆方式。</span></div>
+        <div><b>Today / Routine</b><span>长期档案作为 baseline；当天肤况作为临时 override。</span></div>
+      </div>
+    </div>
+  </section>
+
   <section id="settings" hidden>
     <div class="card">
       <div class="title"><h3>Privacy & Data</h3></div>
@@ -122,7 +149,7 @@
         <div>Network</div><div>默认不上传；仅在当前扫描逐次确认后可访问同源安全代理</div>
         <div>AI Identification</div><div id="aiConfigStatus">OFF · secure proxy not configured</div>
         <div>Local Detection</div><div>本机压缩、候选区域、裁剪、颜色与配对建议</div>
-        <div>Version</div><div>V1.7.4</div>
+        <div>Version</div><div>V1.8.0</div>
       </div>
       <div class="card inset-card top-gap">
         <b>AI Recognition proxy（可选）</b>
@@ -144,6 +171,7 @@
   <button data-tab="scan" type="button">Scan</button>
   <button data-tab="compare" type="button">Compare</button>
   <button data-tab="expiry" type="button">Expiry</button>
+  <button data-tab="profile" type="button">My Skin</button>
   <button data-tab="settings" type="button">Privacy</button>
 </div></nav>
 </div>
@@ -151,6 +179,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=1740" defer></script>
+<script src="app.js?v=1800" defer></script>
 </body>
 </html>
