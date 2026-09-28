@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.7.3';
+const APP_VERSION = '1.7.4';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -24,6 +24,11 @@ let products = [];
 let scanSessions = [];
 let activeScanId = '';
 let imageUrls = new Map();
+let quickFindTextIndex = [];
+let quickFindState = {mode:'idle',query:'',results:[],selectedId:'',status:'',progress:0};
+let quickFindPhotoUrl = '';
+let quickFindVisualCache = new Map();
+let quickFindInputTimer = 0;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -125,7 +130,9 @@ function idbClear(store) {
 
 async function reloadProducts() {
   products = (await idbGetAll('products')).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  rebuildQuickFindTextIndex();
 }
+
 async function reloadScanSessions() {
   scanSessions = (await idbGetAll('scanSessions')).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
   if(activeScanId&&!scanSessions.some(s=>s.id===activeScanId))activeScanId='';
@@ -167,7 +174,10 @@ async function storeImage(productId, file, source) {
   const img = await compressImage(file);
   const data = await img.blob.arrayBuffer();
   const id = uuid();
-  await idbPut('images', {id,productId,data,mime:img.mime,width:img.width,height:img.height,source,updatedAt:new Date().toISOString()});
+  let quickFindFeature=null;
+  try{quickFindFeature=await quickFindFeatureFromBlob(img.blob);}catch(e){console.warn('quick find feature skipped',e);}
+  await idbPut('images', {id,productId,data,mime:img.mime,width:img.width,height:img.height,source,quickFindFeature,updatedAt:new Date().toISOString()});
+  if(quickFindFeature)quickFindVisualCache.set(id,quickFindFeature);
   return id;
 }
 async function storeScanImage(sessionId,file,role='angle'){
@@ -353,7 +363,7 @@ function attentionInfo(p) {
   if (!p.opened && p.form === 'Cream') return {level:'warn',label:'年龄未知 · 定期检查'};
   return {level:'good',label:'状态检查管理'};
 }
-function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
+function renderAll(){renderHome();renderProducts();renderExpiry();renderComparePicker();renderScanShelf();renderQuickFindResults();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
 function renderHome(){
   $('#count').textContent=products.length;
   $('#imageCount').textContent=new Set(products.flatMap(productImageIds)).size;
@@ -391,6 +401,108 @@ function textSimilarity(a,b){
   const common=[...xs].filter(v=>ys.has(v)).length; const total=new Set([...xs,...ys]).size;
   return total?common/total:0;
 }
+
+const QUICK_FIND_FIELDS=[
+  ['品牌','brand',10],['产品名','name',12],['色号','shade',11],['类别','cat',7],['质地','form',6],
+  ['适配','fit',8],['我的实测','myResult',10],['怎么用','role',7],['备注','notes',4],['状态','status',5],
+  ['产品线','productLine',5],['包装文字','packagingText',3]
+];
+const QUICK_FIND_CATEGORY_SYNONYMS={
+  blush:'腮红 胭脂 cheek',highlighter:'高光 提亮 highlight',bronzer:'古铜 bronzing 修容',contour:'修容 阴影 contour',
+  eyeshadow:'眼影 eye shadow',eyeliner:'眼线 eye liner',lipstick:'口红 唇膏 lipstick',lip:'口红 唇膏 唇釉 lip',
+  primer:'妆前 primer',foundation:'粉底 底妆 foundation',concealer:'遮瑕 concealer',powder:'散粉 定妆粉 粉饼 powder',
+  skincare:'护肤 skincare',brow:'眉 brow'
+};
+function quickFindAttributeText(p={}){return Object.values(p.attributes||{}).filter(Boolean).join(' ');}
+function quickFindSynonymText(p={}){
+  const c=norm(`${p.cat||''} ${p.form||''} ${p.attributes?.function||''}`);let out='';
+  for(const [key,value] of Object.entries(QUICK_FIND_CATEGORY_SYNONYMS))if(c.includes(key))out+=` ${value}`;
+  return out;
+}
+function quickFindRecord(p){
+  const fields=QUICK_FIND_FIELDS.map(([label,key,weight])=>({label,key,weight,raw:String(p[key]||''),text:norm(p[key]||'')}));
+  fields.push({label:'结构化属性',key:'attributes',weight:6,raw:quickFindAttributeText(p),text:norm(quickFindAttributeText(p))});
+  fields.push({label:'同义词',key:'synonyms',weight:3,raw:quickFindSynonymText(p),text:norm(quickFindSynonymText(p))});
+  const all=fields.map(f=>f.text).filter(Boolean).join(' ');return{id:p.id,product:p,fields,all};
+}
+function rebuildQuickFindTextIndex(){quickFindTextIndex=products.map(quickFindRecord);}
+function quickFindTextSearch(query){
+  const q=norm(query),tokens=q.split(' ').filter(Boolean);if(!q||!tokens.length)return[];
+  const out=[];
+  for(const rec of quickFindTextIndex){
+    if(!tokens.every(t=>rec.all.includes(t)))continue;
+    let points=28,reasons=[];
+    for(const field of rec.fields){
+      if(!field.text)continue;let hit=0;
+      if(field.text===q)hit=1;else if(field.text.startsWith(q))hit=.86;else if(field.text.includes(q))hit=.72;
+      else {const matched=tokens.filter(t=>field.text.includes(t)).length;if(matched)hit=.35+.35*(matched/tokens.length);}
+      if(hit){points+=field.weight*hit;reasons.push({label:field.label,value:field.raw,weight:field.weight*hit});}
+    }
+    if(norm(rec.product.name)===q||norm(rec.product.shade)===q)points+=18;
+    reasons.sort((a,b)=>b.weight-a.weight);out.push({product:rec.product,score:Math.min(99,Math.round(points)),reasons:reasons.slice(0,3)});
+  }
+  return out.sort((a,b)=>b.score-a.score||String(a.product.name).localeCompare(String(b.product.name))).slice(0,24);
+}
+function quickFindFeatureFromImage(img){
+  const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,32,32);
+  const d=ctx.getImageData(0,0,32,32).data;let r=0,g=0,b=0,n=0;const hist=Array(8).fill(0),gray=[];
+  for(let i=0;i<d.length;i+=4){const rr=d[i],gg=d[i+1],bb=d[i+2],y=.299*rr+.587*gg+.114*bb;r+=rr;g+=gg;b+=bb;n++;hist[Math.min(7,Math.floor(y/32))]++;gray.push(y);}
+  const total=Math.max(1,n);r/=total;g/=total;b/=total;for(let i=0;i<hist.length;i++)hist[i]/=total;
+  const hashCanvas=document.createElement('canvas');hashCanvas.width=9;hashCanvas.height=8;const hc=hashCanvas.getContext('2d',{willReadFrequently:true});hc.drawImage(img,0,0,9,8);const hd=hc.getImageData(0,0,9,8).data,bits=[];
+  const lum=i=>.299*hd[i]+.587*hd[i+1]+.114*hd[i+2];for(let y=0;y<8;y++)for(let x=0;x<8;x++){const i=(y*9+x)*4,j=(y*9+x+1)*4;bits.push(lum(i)>lum(j)?'1':'0');}
+  return{avg:[Math.round(r),Math.round(g),Math.round(b)],hist:hist.map(x=>Number(x.toFixed(4))),hash:bits.join(''),aspect:Number((img.naturalWidth/Math.max(1,img.naturalHeight)).toFixed(3))};
+}
+async function quickFindFeatureFromBlob(blob){const img=await blobToImage(blob);return quickFindFeatureFromImage(img);}
+async function storedQuickFindFeature(imageId){
+  if(!imageId)return null;if(quickFindVisualCache.has(imageId))return quickFindVisualCache.get(imageId);
+  const rec=await idbGet('images',imageId);if(!rec?.data)return null;if(rec.quickFindFeature){quickFindVisualCache.set(imageId,rec.quickFindFeature);return rec.quickFindFeature;}
+  const feature=await quickFindFeatureFromBlob(new Blob([rec.data],{type:rec.mime||'image/jpeg'}));rec.quickFindFeature=feature;await idbPut('images',rec);quickFindVisualCache.set(imageId,feature);return feature;
+}
+function quickFindHamming(a='',b=''){if(!a||!b||a.length!==b.length)return .5;let diff=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])diff++;return 1-diff/a.length;}
+function quickFindVisualSimilarity(a,b){
+  const colorDist=Math.sqrt(a.avg.reduce((s,v,i)=>s+(v-b.avg[i])**2,0))/441.7,color=Math.max(0,1-colorDist);
+  const hist=Math.max(0,1-a.hist.reduce((s,v,i)=>s+Math.abs(v-(b.hist[i]||0)),0)/2),hash=quickFindHamming(a.hash,b.hash);
+  const aspect=Math.max(0,1-Math.min(1,Math.abs(Math.log(Math.max(.05,a.aspect)/Math.max(.05,b.aspect)))/1.25));
+  const score=100*(hash*.4+color*.28+hist*.22+aspect*.10),reasons=[];
+  if(hash>.72)reasons.push({label:'整体视觉',value:'包装纹理/结构接近'});if(color>.82)reasons.push({label:'包装主色',value:'颜色接近'});if(hist>.86)reasons.push({label:'明暗分布',value:'明暗结构接近'});if(aspect>.9)reasons.push({label:'外形比例',value:'长宽比例接近'});
+  return{score:Math.round(score),reasons:reasons.slice(0,3),parts:{hash,color,hist,aspect}};
+}
+async function quickFindMapLimit(list,limit,worker,onProgress){let next=0,done=0;const out=new Array(list.length);async function run(){while(true){const i=next++;if(i>=list.length)return;try{out[i]=await worker(list[i],i);}catch(e){console.warn('quick find visual item skipped',e);out[i]=null;}done++;if(onProgress)onProgress(done,list.length);await new Promise(r=>setTimeout(r,0));}}await Promise.all(Array.from({length:Math.min(limit,list.length||1)},run));return out;}
+function quickFindAmbiguous(results=[]){return results.length>1&&Math.abs(results[0].score-results[1].score)<=7;}
+function quickFindCandidateHTML(result){
+  const p=result.product,imageId=imageSlots(p).primaryImageId,reasons=(result.reasons||[]).map(r=>`<span class="quick-find-reason">${esc(r.label)}${r.value?` · ${esc(r.value)}`:''}</span>`).join('');
+  return `<article class="quick-find-result ${quickFindState.selectedId===p.id?'selected':''}">${imageId?`<img class="quick-find-thumb" alt="${esc(p.name)}" data-image-id="${esc(imageId)}">`:'<div class="quick-find-thumb placeholder">✦</div>'}<div class="quick-find-result-body"><div class="quick-find-result-head"><div><span class="type">${esc(p.cat||'Uncategorized')}</span><b>${esc(p.brand?`${p.brand} · `:'')}${esc(p.name||'未命名产品')}</b><span>${esc(p.shade||'色号未记录')}</span></div><span class="quick-find-score">${Math.round(result.score)}%</span></div><div class="quick-find-reasons">${reasons||'<span class="quick-find-reason">本地候选</span>'}</div>${p.fit?`<p class="quick-find-fit">${esc(p.fit)}</p>`:''}<div class="quick-find-actions"><button type="button" data-qf-confirm="${esc(p.id)}">就是这个</button><button class="secondary" type="button" data-qf-details="${esc(p.id)}">查看详情</button><button class="secondary" type="button" data-qf-edit="${esc(p.id)}">编辑</button><button class="secondary" type="button" data-qf-dismiss="${esc(p.id)}">排除</button></div></div></article>`;
+}
+function renderQuickFindResults(){
+  const root=$('#quickFindResults'),status=$('#quickFindStatus');if(!root||!status)return;
+  status.textContent=quickFindState.status||'';const results=quickFindState.results||[];
+  if(quickFindState.mode==='idle'){root.innerHTML='';return;}
+  if(quickFindState.mode==='loading'){root.innerHTML='<div class="quick-find-loading"><span></span><b>正在本机查找…</b></div>';return;}
+  if(!results.length){root.innerHTML='<div class="quick-find-none"><b>没有找到可靠候选</b><p>可以换关键词/角度再试，或直接新建产品。</p><button type="button" data-qf-new>＋ 新建产品</button></div>';return;}
+  const selected=quickFindState.selectedId?products.find(p=>p.id===quickFindState.selectedId):null;
+  const selection=selected?`<div class="quick-find-selected"><b>✓ 已选择：${esc(selected.brand?`${selected.brand} · `:'')}${esc(selected.name)}</b>${selected.shade?`<span>${esc(selected.shade)}</span>`:''}${selected.role?`<p>${esc(selected.role)}</p>`:''}<div class="toolbar"><button class="secondary" type="button" data-qf-details="${esc(selected.id)}">查看完整档案</button><button class="secondary" type="button" data-qf-edit="${esc(selected.id)}">编辑</button></div></div>`:'';
+  const ambiguity=quickFindAmbiguous(results)?'<div class="quick-find-ambiguity"><b>有多个相似候选，请确认</b><span>Quick Find 不会替你自动选择。</span></div>':'';
+  root.innerHTML=`${selection}${ambiguity}<div class="quick-find-result-list">${results.map(quickFindCandidateHTML).join('')}</div><div class="quick-find-footer"><button class="secondary" type="button" data-qf-none>都不是这些</button><button type="button" data-qf-new>＋ 新建产品</button></div>`;activateLazyImages();
+}
+function clearQuickFind(){
+  quickFindState={mode:'idle',query:'',results:[],selectedId:'',status:'',progress:0};if($('#quickFindText'))$('#quickFindText').value='';if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').value='';if(quickFindPhotoUrl){URL.revokeObjectURL(quickFindPhotoUrl);quickFindPhotoUrl='';}if($('#quickFindPhotoWrap'))$('#quickFindPhotoWrap').hidden=true;renderQuickFindResults();
+}
+function runQuickFindText(query){
+  const q=String(query||'').trim();if(!q){quickFindState={mode:'idle',query:'',results:[],selectedId:'',status:'',progress:0};renderQuickFindResults();return;}
+  const results=quickFindTextSearch(q);quickFindState={mode:'text',query:q,results,selectedId:'',status:results.length?`找到 ${results.length} 个关键词候选；请从候选中确认你要找的产品。`:'没有找到关键词候选。',progress:100};renderQuickFindResults();
+}
+async function runQuickFindPhoto(file){
+  if(!file)return;quickFindState={mode:'loading',query:file.name||'photo',results:[],selectedId:'',status:'正在分析查询图片…',progress:0};renderQuickFindResults();
+  if(quickFindPhotoUrl)URL.revokeObjectURL(quickFindPhotoUrl);quickFindPhotoUrl=URL.createObjectURL(file);if($('#quickFindPhotoPreview'))$('#quickFindPhotoPreview').src=quickFindPhotoUrl;if($('#quickFindPhotoWrap'))$('#quickFindPhotoWrap').hidden=false;
+  try{
+    const queryFeature=await quickFindFeatureFromBlob(file),candidates=products.map(product=>({product,imageId:imageSlots(product).primaryImageId})).filter(x=>x.imageId);
+    if(!candidates.length){quickFindState={mode:'photo',query:'',results:[],selectedId:'',status:'库存中还没有可用于照片匹配的产品图片。',progress:100};renderQuickFindResults();return;}
+    const raw=await quickFindMapLimit(candidates,5,async entry=>{const f=await storedQuickFindFeature(entry.imageId);if(!f)return null;const sim=quickFindVisualSimilarity(queryFeature,f);return{product:entry.product,score:sim.score,reasons:sim.reasons};},(done,total)=>{quickFindState.status=`首次/增量建立本地视觉指纹并比较：${done} / ${total}`;const s=$('#quickFindStatus');if(s)s.textContent=quickFindState.status;});
+    const results=raw.filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,12);const top=results[0]?.score||0,filtered=top>=45?results.filter(r=>r.score>=Math.max(32,top-24)):results.slice(0,8);
+    quickFindState={mode:'photo',query:file.name||'photo',results:filtered,selectedId:'',status:`本地照片查找完成：返回 ${filtered.length} 个最相似候选。仅比较你的 Cabinet 图片，不识别互联网产品。`,progress:100};renderQuickFindResults();
+  }catch(e){console.error(e);quickFindState={mode:'photo',query:'',results:[],selectedId:'',status:'照片查找失败，请换一张更清楚、主体更完整的照片。',progress:100};renderQuickFindResults();}
+}
+function quickFindDismiss(id){quickFindState.results=(quickFindState.results||[]).filter(r=>r.product.id!==id);if(quickFindState.selectedId===id)quickFindState.selectedId='';renderQuickFindResults();}
 function categoryFamily(cat=''){
   const c=norm(cat);
   if(['foundation','concealer','primer','powder'].includes(c))return 'base';
@@ -464,6 +576,7 @@ function productFormHTML(p=null){
     <label>色号 / 颜色描述</label><input name="shade" value="${esc(x.shade||'')}" placeholder="例如 muted dusty rose">
     <label>质地</label><select name="form">${['Powder','Cream','Liquid','Balm','Gel','Stick','Mascara','Liquid eyeliner','Other'].map(v=>`<option ${x.form===v?'selected':''}>${v}</option>`).join('')}</select>
     <label>对我的适配</label><input name="fit" value="${esc(x.fit||'')}" placeholder="例如 很适合 / 搭配后适合">
+    <label>我的实际上脸 / 使用结果</label><input name="myResult" value="${esc(x.myResult||'')}" placeholder="例如 太浅不显气色 / 很适合我 / 实际比照片更灰">
     <label>用途 / 搭配说明</label><textarea name="role" placeholder="例如：适合与低饱和腮红混合">${esc(x.role||'')}</textarea>
     <details class="attribute-panel" open><summary>结构化产品属性</summary><div class="attribute-grid">
       <label>色相<select name="attrHue">${selectOptions(['','Red','Orange','Yellow','Green','Cyan','Blue','Purple','Pink','Neutral'],attrs.hue)}</select></label>
@@ -504,7 +617,7 @@ async function showProduct(id){
     ${photos?`<div class="product-gallery">${photos}</div>`:'<div class="empty-state"><div class="empty-icon">✦</div>暂无产品图片</div>'}
     ${p.officialImageUrl?`<div class="source-record"><b>图片来源网址（仅本地文字记录）</b><div>${esc(p.officialImageUrl)}</div></div>`:''}
     <p>${p.shade?`<span class="pill">${esc(p.shade)}</span>`:''}${p.fit?`<span class="pill">${esc(p.fit)}</span>`:''}<span class="pill ${info.level}">${esc(info.label)}</span></p>
-    <div class="card"><b>For You</b><p>${esc(p.role||'尚未记录适配和搭配说明。')}</p></div>
+    <div class="card"><b>For You</b><p>${esc(p.role||'尚未记录适配和搭配说明。')}</p>${p.myResult?`<div class="actual-result"><b>我的实际结果</b><p>${esc(p.myResult)}</p></div>`:''}</div>
     <div class="card"><b>Product Passport</b><div class="kv"><div>品牌</div><div>${esc(p.brand||'未记录')}</div><div>生产日期</div><div>${esc(p.made||'未记录')}</div><div>购买日期</div><div>${esc(p.bought||'未记录')}</div><div>开封日期</div><div>${esc(p.opened||'未知')}</div><div>PAO</div><div>${esc(p.pao?`${p.pao} 个月`:'待录入')}</div><div>状态</div><div>${esc(p.status||'正常')}</div></div></div>
     ${attrRows?`<div class="card"><b>Structured Attributes</b><div class="kv top-gap">${attrRows}</div></div>`:''}
     ${(p.productLine||p.barcodeText||p.batchCode||p.packagingText||p.identification)?`<div class="card"><b>Identification record</b><div class="kv top-gap"><div>产品线 / 版本</div><div>${esc(p.productLine||'未记录')}</div><div>可见条码</div><div>${esc(p.barcodeText||'未记录')}</div><div>批号 / 色号代码</div><div>${esc(p.batchCode||'未记录')}</div><div>包装文字</div><div>${esc(p.packagingText||'未记录')}</div><div>来源</div><div>${p.identification?'AI suggestion · user confirmed':'Manual entry'}</div></div></div>`:''}
@@ -516,7 +629,7 @@ async function showProduct(id){
 async function handleProductSubmit(form){
   const fd=new FormData(form); const id=form.dataset.id||uuid(); const existing=products.find(p=>p.id===id)||{},slots=imageSlots(existing);
   const attributes={hue:fd.get('attrHue')||'',undertone:fd.get('attrUndertone')||'',saturation:fd.get('attrSaturation')||'',depth:fd.get('attrDepth')||'',texture:fd.get('attrTexture')||'',finish:fd.get('attrFinish')||'',coverage:fd.get('attrCoverage')||'',function:String(fd.get('attrFunction')||'').trim()};
-  const p={...existing,id,name:String(fd.get('name')||'').trim(),brand:String(fd.get('brand')||'').trim(),cat:fd.get('cat'),shade:String(fd.get('shade')||'').trim(),form:fd.get('form'),fit:String(fd.get('fit')||'').trim(),role:String(fd.get('role')||'').trim(),attributes,made:fd.get('made'),bought:fd.get('bought'),opened:fd.get('opened'),pao:String(fd.get('pao')||'').trim(),status:fd.get('status'),notes:String(fd.get('notes')||'').trim(),officialImageUrl:String(fd.get('officialImageUrl')||'').trim(),userImageId:slots.userImageId,officialImageId:slots.officialImageId};
+  const p={...existing,id,name:String(fd.get('name')||'').trim(),brand:String(fd.get('brand')||'').trim(),cat:fd.get('cat'),shade:String(fd.get('shade')||'').trim(),form:fd.get('form'),fit:String(fd.get('fit')||'').trim(),myResult:String(fd.get('myResult')||'').trim(),role:String(fd.get('role')||'').trim(),attributes,made:fd.get('made'),bought:fd.get('bought'),opened:fd.get('opened'),pao:String(fd.get('pao')||'').trim(),status:fd.get('status'),notes:String(fd.get('notes')||'').trim(),officialImageUrl:String(fd.get('officialImageUrl')||'').trim(),userImageId:slots.userImageId,officialImageId:slots.officialImageId};
   const userFile=fd.get('userImage'),officialFile=fd.get('officialImage'); const newIds=[],staleIds=new Set(); let saved=false;
   try{
     if(userFile&&userFile.size){toast('正在本地压缩实物图…');p.userImageId=await storeImage(id,userFile,'my_photo');newIds.push(p.userImageId);if(slots.userImageId)staleIds.add(slots.userImageId);}
@@ -877,9 +990,9 @@ async function importAssistedResults(file){
       const id=uuid();let userImageId='';const image=raw.image||raw.userImage||null;
       if(image?.dataBase64){
         const bytes=b64ToBytes(String(image.dataBase64).replace(/^data:[^,]+,/,'')),imageId=uuid();
-        await idbPut('images',{id:imageId,productId:id,data:bytes.buffer,mime:image.mime||'image/jpeg',width:Number(image.width)||0,height:Number(image.height)||0,source:'assisted_import',updatedAt:new Date().toISOString()});userImageId=imageId;
+        let quickFindFeature=null;try{quickFindFeature=await quickFindFeatureFromBlob(new Blob([bytes],{type:image.mime||'image/jpeg'}));}catch(e){console.warn('assisted quick find feature skipped',e);}await idbPut('images',{id:imageId,productId:id,data:bytes.buffer,mime:image.mime||'image/jpeg',width:Number(image.width)||0,height:Number(image.height)||0,source:'assisted_import',quickFindFeature,updatedAt:new Date().toISOString()});if(quickFindFeature)quickFindVisualCache.set(imageId,quickFindFeature);userImageId=imageId;
       }
-      const p={id,name:String(raw.name||raw.productName||'未命名产品').trim(),brand:String(raw.brand||'').trim(),cat:String(raw.cat||raw.category||'Other'),shade:String(raw.shade||'').trim(),form:String(raw.form||raw.texture||'Other'),fit:String(raw.fit||'').trim(),role:String(raw.role||raw.pairingNotes||'').trim(),productLine:String(raw.productLine||'').trim(),barcodeText:String(raw.barcodeText||'').trim(),batchCode:String(raw.batchCode||'').trim(),packagingText:String(raw.packagingText||'').trim(),identification:raw.identification||{status:'assisted-import',source:'ChatGPT/manual review'},attributes:normalizeAssistedAttributes(raw.attributes||{}),made:String(raw.made||'').trim(),bought:String(raw.bought||'').trim(),opened:String(raw.opened||'').trim(),pao:String(raw.pao||'').trim(),status:String(raw.status||'需检查'),notes:String(raw.notes||'通过 Batch Assisted Import 导入').trim(),officialImageUrl:'',userImageId,officialImageId:'',imageId:userImageId,imageSource:userImageId?'assisted_import':'',scanCropImageId:'',sourceImages:[],relationships:Array.isArray(raw.relationships)?raw.relationships:[],createdAt:new Date().toISOString()};
+      const p={id,name:String(raw.name||raw.productName||'未命名产品').trim(),brand:String(raw.brand||'').trim(),cat:String(raw.cat||raw.category||'Other'),shade:String(raw.shade||'').trim(),form:String(raw.form||raw.texture||'Other'),fit:String(raw.fit||'').trim(),myResult:String(raw.myResult||'').trim(),role:String(raw.role||raw.pairingNotes||'').trim(),productLine:String(raw.productLine||'').trim(),barcodeText:String(raw.barcodeText||'').trim(),batchCode:String(raw.batchCode||'').trim(),packagingText:String(raw.packagingText||'').trim(),identification:raw.identification||{status:'assisted-import',source:'ChatGPT/manual review'},attributes:normalizeAssistedAttributes(raw.attributes||{}),made:String(raw.made||raw.productionDate||'').trim(),bought:String(raw.bought||raw.purchaseDate||'').trim(),opened:String(raw.opened||'').trim(),pao:String(raw.pao||'').trim(),status:String(raw.status||'需检查'),notes:String(raw.notes||'通过 Batch Assisted Import 导入').trim(),officialImageUrl:'',userImageId,officialImageId:'',imageId:userImageId,imageSource:userImageId?'assisted_import':'',scanCropImageId:'',sourceImages:[],relationships:Array.isArray(raw.relationships)?raw.relationships:[],createdAt:new Date().toISOString()};
       await saveProduct(p);imported++;
     }
     await reloadProducts();renderAll();toast(`已导入 ${imported} 件产品`);tab('cabinet');
@@ -890,7 +1003,7 @@ async function clearAllData(){
   if(!confirm('这会永久删除这台设备上的 Beauty Cabinet 数据。建议先导出加密备份。继续？'))return;
   if(!confirm('最后确认：删除后无法撤销。'))return;
   try{
-    products=[];scanSessions=[];activeScanId='';revokeAllImages();await idbClear('products');await idbClear('images');await idbClear('settings');await idbClear('scanSessions');await idbClear('relationships');renderAll();toast('本机数据已删除');
+    products=[];scanSessions=[];activeScanId='';quickFindVisualCache.clear();clearQuickFind();revokeAllImages();await idbClear('products');await idbClear('images');await idbClear('settings');await idbClear('scanSessions');await idbClear('relationships');renderAll();toast('本机数据已删除');
   }catch(e){console.error(e);alert('删除失败，请关闭其他 Beauty Cabinet 页面后重试。');}
 }
 
@@ -898,6 +1011,9 @@ function bindEvents(){
   $('#homeAddBtn').addEventListener('click',()=>openProductForm());
   if($('#homeScanBtn'))$('#homeScanBtn').addEventListener('click',()=>tab('scan'));
   $('#addBtn').addEventListener('click',()=>openProductForm());
+  if($('#quickFindText'))$('#quickFindText').addEventListener('input',e=>{clearTimeout(quickFindInputTimer);quickFindInputTimer=setTimeout(()=>runQuickFindText(e.target.value),120);});
+  if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)runQuickFindPhoto(f);e.target.value='';});
+  if($('#quickFindClearBtn'))$('#quickFindClearBtn').addEventListener('click',clearQuickFind);
   $('#closeModalBtn').addEventListener('click',closeModal);
   $('#exportBtn').addEventListener('click',exportBackup);
   $('#homeBackupBtn').addEventListener('click',exportBackup);
@@ -918,6 +1034,12 @@ function bindEvents(){
     const scanAction=e.target.closest('[data-scan-action]');if(scanAction){const action=scanAction.dataset.scanAction;if(action==='back'){activeScanId='';renderScanShelf();}else if(action==='local-detect'||action==='recognize')await startLocalDetection();else if(action==='ai-identify')await runAiIdentification();else if(action==='confirm-pairings')await confirmPairings();else if(action==='merge-candidates')await mergeCandidates();else if(action==='add-candidate')await addManualCandidate();else if(action==='import-candidates')await importCandidates();else if(action==='export-scan-package')await exportAssistedScanPackage();else if(action==='import-assisted-results')chooseAssistedResultFile();return;}
     const reviewFilter=e.target.closest('[data-review-filter]');if(reviewFilter){const session=activeScan();if(session){session.reviewFilter=reviewFilter.dataset.reviewFilter;await saveScanSession(session);renderScanShelf();}return;}
     const candidateButton=e.target.closest('[data-candidate-action]');if(candidateButton){await candidateAction(candidateButton.dataset.candidateAction,candidateButton.dataset.id);return;}
+    const qfConfirm=e.target.closest('[data-qf-confirm]');if(qfConfirm){quickFindState.selectedId=qfConfirm.dataset.qfConfirm;renderQuickFindResults();return;}
+    const qfDetails=e.target.closest('[data-qf-details]');if(qfDetails){showProduct(qfDetails.dataset.qfDetails);return;}
+    const qfEdit=e.target.closest('[data-qf-edit]');if(qfEdit){openProductForm(products.find(x=>x.id===qfEdit.dataset.qfEdit));return;}
+    const qfDismiss=e.target.closest('[data-qf-dismiss]');if(qfDismiss){quickFindDismiss(qfDismiss.dataset.qfDismiss);return;}
+    if(e.target.closest('[data-qf-none]')){quickFindState.results=[];quickFindState.selectedId='';quickFindState.status='这些候选都不是。可以换关键词/照片，或新建产品。';renderQuickFindResults();return;}
+    if(e.target.closest('[data-qf-new]')){openProductForm();return;}
     const p=e.target.closest('[data-product-id]');if(p&&!p.closest('#productForm')){showProduct(p.dataset.productId);return;}
     const a=e.target.closest('[data-action]');if(a){const id=a.dataset.id;if(a.dataset.action==='edit')openProductForm(products.find(x=>x.id===id));if(a.dataset.action==='delete')deleteProduct(id);return;}
     if(e.target===$('#modal'))closeModal();

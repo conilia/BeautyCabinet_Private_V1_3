@@ -12,16 +12,16 @@
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://*.workers.dev; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
   <meta name="beauty-ai-endpoint" content="">
-  <link rel="manifest" href="manifest.webmanifest?v=1720">
-  <link rel="stylesheet" href="styles.css?v=1720">
-  <title>Beauty Cabinet V1.7.3 Local</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1740">
+  <link rel="stylesheet" href="styles.css?v=1740">
+  <title>Beauty Cabinet V1.7.4 Quick Find</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.7.3 · Local Detection + optional AI Identification</div>
+    <div class="sub">V1.7.4 · Quick Find + Local Cabinet</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -70,6 +70,18 @@
       <div class="title"><h3>我的化妆柜</h3><button id="addBtn" type="button">＋ 添加</button></div>
       <div class="scan-box"><b>📷 双图产品档案</b><div class="note">每件产品可分别保存“我的实物图”和“官方/网上产品图”的本地副本；Cabinet 优先显示实物图缩略图。来源网址只作文字记录，App 不会自动访问或热链远程图片。</div></div>
     </div>
+    <div class="quick-find card" id="quickFindCard">
+      <div class="title"><h3>Quick Find · 快速查找</h3><span class="status-badge">LOCAL</span></div>
+      <p class="note">在自己的 Cabinet 中快速找产品。关键词搜索支持品牌、产品名、色号、类别、颜色、质地、妆效、适配、用法和备注；拍照查找只比较本机已有产品图片，不会上传或联网识别。</p>
+      <div class="quick-find-controls">
+        <input id="quickFindText" type="search" enterkeyhint="search" autocomplete="off" placeholder="例如 KIKO 329、灰棕眼影、很适合我、快过期…">
+        <label class="quick-find-photo" for="quickFindPhotoInput">📷 拍照 / 选图<input id="quickFindPhotoInput" type="file" accept="image/*"></label>
+        <button id="quickFindClearBtn" class="secondary" type="button">清除</button>
+      </div>
+      <div id="quickFindPhotoWrap" class="quick-find-photo-preview" hidden><img id="quickFindPhotoPreview" alt="Quick Find 查询图片"><div><b>仅本地视觉匹配</b><span>第一次照片搜索会为已有库存图片建立本地视觉指纹，后续会更快。</span></div></div>
+      <div id="quickFindStatus" class="quick-find-status" aria-live="polite"></div>
+      <div id="quickFindResults"></div>
+    </div>
     <div id="emptyCabinet" class="empty-state" hidden><div class="empty-icon">🧴</div><b>还没有产品</b><p>先添加第一件化妆品或护肤品。</p></div>
     <div id="products" class="grid"></div>
   </section>
@@ -105,11 +117,11 @@
         <div>Network</div><div>默认不上传；仅在当前扫描逐次确认后可访问同源安全代理</div>
         <div>AI Identification</div><div id="aiConfigStatus">OFF · secure proxy not configured</div>
         <div>Local Detection</div><div>本机压缩、候选区域、裁剪、颜色与配对建议</div>
-        <div>Version</div><div>V1.7.3</div>
+        <div>Version</div><div>V1.7.4</div>
       </div>
       <div class="card inset-card top-gap">
         <b>AI Recognition proxy（可选）</b>
-        <p class="note">真正的品牌/产品/色号识别需要服务器端 AI 代理。地址只保存在本机。推荐使用随 V1.7.3 附带的 Cloudflare Worker；API key 只存为 Worker secret，不进入 GitHub 或浏览器。</p>
+        <p class="note">真正的品牌/产品/色号识别需要服务器端 AI 代理。地址只保存在本机。如需启用该可选功能，可使用项目 backend/ 中的安全代理模板；API key 只存为 Worker secret，不进入 GitHub 或浏览器。</p>
         <label>Worker URL</label>
         <input id="aiEndpointInput" type="url" inputmode="url" autocomplete="off" placeholder="https://your-worker.your-subdomain.workers.dev">
         <div class="toolbar"><button id="saveAiEndpointBtn" class="secondary" type="button">保存 AI endpoint</button><button id="clearAiEndpointBtn" class="secondary" type="button">关闭 AI endpoint</button></div>
@@ -134,6 +146,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=1720" defer></script>
+<script src="app.js?v=1740" defer></script>
 </body>
 </html>

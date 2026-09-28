@@ -1,6 +1,6 @@
-Beauty Cabinet V1.7.3 — improved multi-object Scan Shelf + optional real AI recognition
+Beauty Cabinet V1.7.4 — improved multi-object Scan Shelf + optional real AI recognition
 
-WHAT IS FIXED IN V1.7.3
+WHAT IS FIXED IN V1.7.4
 - Reworked Single-Image Batch local detection. It no longer applies blanket dilation that easily merged adjacent products into one giant region.
 - Added adaptive background estimation, foreground masking, recursive whitespace splitting, aggressive fallback segmentation, and duplicate-box suppression.
 - Review now shows a full-image “Detected regions” overlay so you can immediately see whether one photo was split into multiple candidates.
@@ -9,7 +9,7 @@ WHAT IS FIXED IN V1.7.3
 - Paired Batch AI requests can include the full front and back group images; a secure backend may return new paired frontCrop/backCrop candidates.
 - Added optional local AI endpoint configuration under Privacy. The URL is stored only in this device's IndexedDB.
 - GitHub Pages can now connect only to the same origin plus HTTPS *.workers.dev endpoints. No API key belongs in the browser or repository.
-- Version bumped to V1.7.3. Existing IndexedDB and encrypted backup formats remain compatible.
+- Version bumped to V1.7.4. Existing IndexedDB and encrypted backup formats remain compatible.
 
 IMPORTANT LIMITATION
 Reliable cosmetic brand/product/shade recognition is not realistically achievable with the lightweight browser-only detector. Local Detection is for crops/regions and still may miss touching, reflective, low-contrast, or complex-background products. True recognition and robust multi-object recovery require the optional vision-AI backend.
@@ -71,7 +71,7 @@ DEPLOY APP UPDATE
 3. Do not upload .beautybackup, personal product photos, or JSON inventory files.
 4. Commit and wait for Pages deployment.
 5. Open once with ?v=172.
-6. Confirm header: V1.7.3.
+6. Confirm header: V1.7.4.
 
 TEST CHECKLIST
 - Batch photo with several separated products should now create multiple candidates more often.
@@ -83,8 +83,17 @@ TEST CHECKLIST
 - With Worker configured, full batch image may add multiple AI-detected products and candidates still require manual confirmation before import.
 
 
-V1.7.3 ADDITION — BATCH ASSISTED IMPORT
+V1.7.4 ADDITION — BATCH ASSISTED IMPORT
 - Export Scan Package from any active Scan Shelf session as .beautyscan.json.
 - Import ChatGPT/externally reviewed identification results using the local-only `beauty-cabinet-assisted-results` JSON format.
 - Result JSON can optionally embed one compressed product image per item as base64; imported data is written only to local IndexedDB.
 - No assisted-import file is uploaded automatically.
+
+
+V1.7.4 Quick Find
+- Added local keyword search over brand, name, shade, category, structured attributes, fit, role, myResult, notes and status.
+- Added local photo-to-inventory similarity search. No remote recognition or upload is used.
+- Photo search returns multiple candidates and requires the user to choose “就是这个”; it never auto-selects.
+- Product Passport remains available through “查看详情” but is not forced by Quick Find.
+- Visual fingerprints are cached locally in IndexedDB image records. Existing libraries are fingerprinted lazily on first photo search; new manually-added/assisted-import images get fingerprints on import.
+- Added preservation/display/editing of myResult for future Batch Assisted Imports.
