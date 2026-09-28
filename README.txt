@@ -97,3 +97,12 @@ V1.7.4 Quick Find
 - Product Passport remains available through “查看详情” but is not forced by Quick Find.
 - Visual fingerprints are cached locally in IndexedDB image records. Existing libraries are fingerprinted lazily on first photo search; new manually-added/assisted-import images get fingerprints on import.
 - Added preservation/display/editing of myResult for future Batch Assisted Imports.
+
+
+V1.7.5 Quick Find improvements:
+- Chinese/English concept search (e.g. 粉色腮红, 灰棕眼影, 适合我的裸色口红)
+- Query concept parsing across category, hue, undertone, texture, finish, fit/myResult/status
+- Crop-aware local photo search with auto-subject box and manual drag selection
+- Stronger local visual descriptor: dHash + aHash + spatial color grid + edge orientation + color/aspect features
+- Optional keyword + photo hybrid ranking
+- Shared group-photo detection/penalty to avoid false confidence when multiple items reuse the same batch photo

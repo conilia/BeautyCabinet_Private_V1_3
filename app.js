@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.7.4';
+const APP_VERSION = '1.7.5';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -29,6 +29,10 @@ let quickFindState = {mode:'idle',query:'',results:[],selectedId:'',status:'',pr
 let quickFindPhotoUrl = '';
 let quickFindVisualCache = new Map();
 let quickFindInputTimer = 0;
+let quickFindPhotoFile = null;
+let quickFindPhotoImage = null;
+let quickFindCropRect = {x:0,y:0,width:100,height:100};
+let quickFindCropDrag = null;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -402,70 +406,213 @@ function textSimilarity(a,b){
   return total?common/total:0;
 }
 
+
 const QUICK_FIND_FIELDS=[
   ['品牌','brand',10],['产品名','name',12],['色号','shade',11],['类别','cat',7],['质地','form',6],
   ['适配','fit',8],['我的实测','myResult',10],['怎么用','role',7],['备注','notes',4],['状态','status',5],
   ['产品线','productLine',5],['包装文字','packagingText',3]
 ];
-const QUICK_FIND_CATEGORY_SYNONYMS={
-  blush:'腮红 胭脂 cheek',highlighter:'高光 提亮 highlight',bronzer:'古铜 bronzing 修容',contour:'修容 阴影 contour',
-  eyeshadow:'眼影 eye shadow',eyeliner:'眼线 eye liner',lipstick:'口红 唇膏 lipstick',lip:'口红 唇膏 唇釉 lip',
-  primer:'妆前 primer',foundation:'粉底 底妆 foundation',concealer:'遮瑕 concealer',powder:'散粉 定妆粉 粉饼 powder',
-  skincare:'护肤 skincare',brow:'眉 brow'
-};
+
+const QUICK_FIND_CONCEPTS=[
+  {id:'blush',label:'腮红',aliases:['腮红','胭脂','blush','cheek color','cheek colour']},
+  {id:'highlighter',label:'高光',aliases:['高光','提亮','highlighter','highlight']},
+  {id:'bronzer',label:'古铜',aliases:['古铜','bronzer','bronzing']},
+  {id:'contour',label:'修容',aliases:['修容','阴影','contour','sculpt']},
+  {id:'eyeshadow',label:'眼影',aliases:['眼影','eyeshadow','eye shadow']},
+  {id:'eyeliner',label:'眼线',aliases:['眼线','eyeliner','eye liner','kajal','kohl']},
+  {id:'lip',label:'唇部',aliases:['口红','唇膏','唇釉','唇彩','唇线','lipstick','lip gloss','lipcolor','lip colour','lipliner','lip liner','lip']},
+  {id:'primer',label:'妆前',aliases:['妆前','primer','base primer']},
+  {id:'foundation',label:'粉底',aliases:['粉底','底妆','foundation','bb cream','cc cream','cushion']},
+  {id:'concealer',label:'遮瑕',aliases:['遮瑕','concealer','corrector']},
+  {id:'powder',label:'定妆粉',aliases:['散粉','定妆粉','粉饼','setting powder','loose powder','pressed powder']},
+  {id:'brow',label:'眉部',aliases:['眉笔','眉粉','眉','brow','eyebrow']},
+  {id:'skincare',label:'护肤',aliases:['护肤','skincare','serum','moisturizer','cream']},
+
+  {id:'pink',label:'粉色',aliases:['粉色','粉红','pink','rosy','rose pink']},
+  {id:'rose',label:'玫瑰',aliases:['玫瑰','玫瑰色','rose','rosewood','rosy brown']},
+  {id:'mauve',label:'灰紫/梅子',aliases:['灰紫','梅子','藕粉','mauve','plum','dusty mauve']},
+  {id:'red',label:'红色',aliases:['红色','正红','红','red','ruby','carmine']},
+  {id:'orange',label:'橙色',aliases:['橙色','橘色','橙','橘','orange','tangerine']},
+  {id:'coral',label:'珊瑚',aliases:['珊瑚','coral']},
+  {id:'brown',label:'棕色',aliases:['棕色','棕','咖啡色','brown','chocolate','toffee']},
+  {id:'taupe',label:'灰棕',aliases:['灰棕','灰褐','taupe','greige']},
+  {id:'berry',label:'莓果',aliases:['莓果','莓色','berry']},
+  {id:'nude',label:'裸色',aliases:['裸色','裸棕','nude','beige nude']},
+  {id:'purple',label:'紫色',aliases:['紫色','紫','purple','violet']},
+  {id:'green',label:'绿色',aliases:['绿色','绿','green']},
+  {id:'olive',label:'橄榄',aliases:['橄榄','olive','khaki']},
+  {id:'blue',label:'蓝色',aliases:['蓝色','蓝','blue','navy']},
+  {id:'gold',label:'金色',aliases:['金色','金','gold','golden']},
+  {id:'silver',label:'银色',aliases:['银色','银','silver']},
+  {id:'grey',label:'灰色',aliases:['灰色','灰','grey','gray']},
+
+  {id:'cream',label:'膏状',aliases:['膏状','霜状','cream','creamy','stick']},
+  {id:'powder_texture',label:'粉状',aliases:['粉状','粉质','powder','baked powder']},
+  {id:'liquid',label:'液体',aliases:['液体','液态','liquid']},
+  {id:'matte',label:'哑光',aliases:['哑光','雾面','matte','velvet matte']},
+  {id:'glossy',label:'光泽',aliases:['光泽','亮泽','水光','glossy','glow','dewy','luminous']},
+  {id:'shimmer',label:'珠光',aliases:['珠光','闪','亮片','shimmer','sparkle','glitter','pearlescent','metallic']},
+  {id:'warm',label:'暖调',aliases:['暖色','暖调','偏暖','warm','warm toned']},
+  {id:'cool',label:'冷调',aliases:['冷色','冷调','偏冷','cool','cool toned']},
+  {id:'neutral',label:'中性',aliases:['中性','neutral']},
+  {id:'suitable',label:'适合我',aliases:['适合我','很适合','适合','显气色','flattering','suitable','works for me']},
+  {id:'washout',label:'不显气色',aliases:['不显气色','显白但没气色','太浅','wash me out','washes me out','too pale']},
+  {id:'use_soon',label:'需关注',aliases:['快过期','尽快用','优先用','需检查','use soon','expiry','expired']}
+];
+
+function quickFindRawText(p={}){
+  return [
+    p.brand,p.name,p.shade,p.cat,p.form,p.fit,p.myResult,p.role,p.notes,p.status,p.productLine,p.packagingText,
+    ...Object.values(p.attributes||{})
+  ].filter(Boolean).join(' ');
+}
+function quickFindConceptIdsFromText(text=''){
+  const n=norm(text), out=[];
+  for(const c of QUICK_FIND_CONCEPTS){
+    if(c.aliases.some(a=>{const x=norm(a);return x&&n.includes(x);})){out.push(c.id);}
+  }
+  return [...new Set(out)];
+}
+function quickFindConceptsForProduct(p={}){
+  const raw=quickFindRawText(p), ids=new Set(quickFindConceptIdsFromText(raw));
+  const cat=norm(`${p.cat||''} ${p.attributes?.function||''}`);
+  if(cat.includes('blush'))ids.add('blush');
+  if(cat.includes('highlighter')||cat.includes('highlight'))ids.add('highlighter');
+  if(cat.includes('bronzer'))ids.add('bronzer');
+  if(cat.includes('contour'))ids.add('contour');
+  if(cat.includes('eyeshadow'))ids.add('eyeshadow');
+  if(cat.includes('eyeliner')||cat.includes('eye pencil'))ids.add('eyeliner');
+  if(cat.includes('lip'))ids.add('lip');
+  if(cat.includes('primer'))ids.add('primer');
+  if(cat.includes('foundation')||cat.includes('bb cream')||cat.includes('cc cream')||cat.includes('cushion'))ids.add('foundation');
+  if(cat.includes('concealer')||cat.includes('corrector'))ids.add('concealer');
+  if(cat.includes('powder'))ids.add('powder');
+  if(cat.includes('brow'))ids.add('brow');
+  return ids;
+}
 function quickFindAttributeText(p={}){return Object.values(p.attributes||{}).filter(Boolean).join(' ');}
 function quickFindSynonymText(p={}){
-  const c=norm(`${p.cat||''} ${p.form||''} ${p.attributes?.function||''}`);let out='';
-  for(const [key,value] of Object.entries(QUICK_FIND_CATEGORY_SYNONYMS))if(c.includes(key))out+=` ${value}`;
-  return out;
+  const ids=quickFindConceptsForProduct(p), out=[];
+  for(const id of ids){
+    const c=QUICK_FIND_CONCEPTS.find(x=>x.id===id);
+    if(c)out.push(c.label,...c.aliases);
+  }
+  return out.join(' ');
 }
 function quickFindRecord(p){
   const fields=QUICK_FIND_FIELDS.map(([label,key,weight])=>({label,key,weight,raw:String(p[key]||''),text:norm(p[key]||'')}));
-  fields.push({label:'结构化属性',key:'attributes',weight:6,raw:quickFindAttributeText(p),text:norm(quickFindAttributeText(p))});
-  fields.push({label:'同义词',key:'synonyms',weight:3,raw:quickFindSynonymText(p),text:norm(quickFindSynonymText(p))});
-  const all=fields.map(f=>f.text).filter(Boolean).join(' ');return{id:p.id,product:p,fields,all};
+  fields.push({label:'结构化属性',key:'attributes',weight:7,raw:quickFindAttributeText(p),text:norm(quickFindAttributeText(p))});
+  fields.push({label:'概念/同义词',key:'synonyms',weight:4,raw:quickFindSynonymText(p),text:norm(quickFindSynonymText(p))});
+  const all=fields.map(f=>f.text).filter(Boolean).join(' ');
+  return{id:p.id,product:p,fields,all,concepts:quickFindConceptsForProduct(p)};
 }
 function rebuildQuickFindTextIndex(){quickFindTextIndex=products.map(quickFindRecord);}
-function quickFindTextSearch(query){
-  const q=norm(query),tokens=q.split(' ').filter(Boolean);if(!q||!tokens.length)return[];
+function quickFindParseQuery(query=''){
+  const raw=String(query||'').trim(),n=norm(raw),concepts=[];
+  for(const c of QUICK_FIND_CONCEPTS){
+    if(c.aliases.some(a=>{const x=norm(a);return x&&n.includes(x);})){concepts.push(c);}
+  }
+  let leftover=n;
+  const aliases=concepts.flatMap(c=>c.aliases).map(norm).filter(Boolean).sort((a,b)=>b.length-a.length);
+  for(const a of aliases)leftover=leftover.split(a).join(' ');
+  const stopwords=new Set(['的','我','我要','要','找','查','一个','一款','一些','产品','东西','颜色','色','比较','偏','the','a','an','my','me','find','show']);
+  const tokens=leftover.split(' ').filter(t=>t.length>0&&!stopwords.has(t));
+  return{raw,n,concepts:[...new Map(concepts.map(c=>[c.id,c])).values()],tokens};
+}
+function quickFindTextSearch(query,limit=24){
+  const parsed=quickFindParseQuery(query);if(!parsed.n)return[];
   const out=[];
   for(const rec of quickFindTextIndex){
-    if(!tokens.every(t=>rec.all.includes(t)))continue;
-    let points=28,reasons=[];
+    const conceptMiss=parsed.concepts.filter(c=>!rec.concepts.has(c.id));
+    if(conceptMiss.length)continue;
+    const rawTokens=parsed.tokens;
+    if(rawTokens.length&&!rawTokens.every(t=>rec.all.includes(t)))continue;
+    let points=30,reasons=[];
+    if(parsed.concepts.length){
+      points+=Math.min(34,parsed.concepts.length*10);
+      for(const c of parsed.concepts)reasons.push({label:'概念匹配',value:c.label,weight:10});
+    }
+    const q=parsed.n;
     for(const field of rec.fields){
       if(!field.text)continue;let hit=0;
-      if(field.text===q)hit=1;else if(field.text.startsWith(q))hit=.86;else if(field.text.includes(q))hit=.72;
-      else {const matched=tokens.filter(t=>field.text.includes(t)).length;if(matched)hit=.35+.35*(matched/tokens.length);}
+      if(field.text===q)hit=1;else if(field.text.startsWith(q))hit=.9;else if(field.text.includes(q))hit=.78;
+      else if(rawTokens.length){const matched=rawTokens.filter(t=>field.text.includes(t)).length;if(matched)hit=.35+.4*(matched/rawTokens.length);}
       if(hit){points+=field.weight*hit;reasons.push({label:field.label,value:field.raw,weight:field.weight*hit});}
     }
     if(norm(rec.product.name)===q||norm(rec.product.shade)===q)points+=18;
-    reasons.sort((a,b)=>b.weight-a.weight);out.push({product:rec.product,score:Math.min(99,Math.round(points)),reasons:reasons.slice(0,3)});
+    reasons.sort((a,b)=>b.weight-a.weight);
+    out.push({product:rec.product,score:Math.min(99,Math.round(points)),reasons:reasons.slice(0,4)});
   }
-  return out.sort((a,b)=>b.score-a.score||String(a.product.name).localeCompare(String(b.product.name))).slice(0,24);
+  return out.sort((a,b)=>b.score-a.score||String(a.product.name).localeCompare(String(b.product.name))).slice(0,limit);
 }
-function quickFindFeatureFromImage(img){
-  const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,32,32);
-  const d=ctx.getImageData(0,0,32,32).data;let r=0,g=0,b=0,n=0;const hist=Array(8).fill(0),gray=[];
-  for(let i=0;i<d.length;i+=4){const rr=d[i],gg=d[i+1],bb=d[i+2],y=.299*rr+.587*gg+.114*bb;r+=rr;g+=gg;b+=bb;n++;hist[Math.min(7,Math.floor(y/32))]++;gray.push(y);}
+
+function quickFindCanvasImageData(img,size=96){
+  const canvas=document.createElement('canvas');canvas.width=size;canvas.height=size;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,size,size);
+  return{canvas,ctx,data:ctx.getImageData(0,0,size,size).data,size};
+}
+function quickFindAutoSubjectBox(img){
+  const {data,size}=quickFindCanvasImageData(img,96);
+  let br=0,bg=0,bb=0,bn=0;
+  const border=8;
+  for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+    if(x>=border&&x<size-border&&y>=border&&y<size-border)continue;
+    const i=(y*size+x)*4;br+=data[i];bg+=data[i+1];bb+=data[i+2];bn++;
+  }
+  br/=Math.max(1,bn);bg/=Math.max(1,bn);bb/=Math.max(1,bn);
+  let minX=size,minY=size,maxX=-1,maxY=-1,count=0;
+  for(let y=2;y<size-2;y++)for(let x=2;x<size-2;x++){
+    const i=(y*size+x)*4,dr=data[i]-br,dg=data[i+1]-bg,db=data[i+2]-bb;
+    const dist=Math.sqrt(dr*dr+dg*dg+db*db);
+    if(dist>44){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);count++;}
+  }
+  const coverage=count/(size*size);
+  if(maxX<0||coverage<.06||coverage>.82)return{x:0,y:0,width:100,height:100};
+  const pad=6,minXp=Math.max(0,minX-pad),minYp=Math.max(0,minY-pad),maxXp=Math.min(size-1,maxX+pad),maxYp=Math.min(size-1,maxY+pad);
+  return{x:100*minXp/size,y:100*minYp/size,width:100*(maxXp-minXp+1)/size,height:100*(maxYp-minYp+1)/size};
+}
+function quickFindFeatureFromImage(img,crop={x:0,y:0,width:100,height:100}){
+  const c=safeCrop(crop),sx=img.naturalWidth*c.x/100,sy=img.naturalHeight*c.y/100,sw=img.naturalWidth*c.width/100,sh=img.naturalHeight*c.height/100;
+  const canvas=document.createElement('canvas');canvas.width=48;canvas.height=48;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,sx,sy,sw,sh,0,0,48,48);
+  const d=ctx.getImageData(0,0,48,48).data;let r=0,g=0,b=0,n=0;const hist=Array(8).fill(0),gray=[];
+  const grid=Array.from({length:16},()=>[0,0,0,0]);
+  for(let y=0;y<48;y++)for(let x=0;x<48;x++){
+    const i=(y*48+x)*4,rr=d[i],gg=d[i+1],bb=d[i+2],lum=.299*rr+.587*gg+.114*bb;r+=rr;g+=gg;b+=bb;n++;hist[Math.min(7,Math.floor(lum/32))]++;gray.push(lum);
+    const gx=Math.min(3,Math.floor(x/12)),gy=Math.min(3,Math.floor(y/12)),cell=grid[gy*4+gx];cell[0]+=rr;cell[1]+=gg;cell[2]+=bb;cell[3]++;
+  }
   const total=Math.max(1,n);r/=total;g/=total;b/=total;for(let i=0;i<hist.length;i++)hist[i]/=total;
-  const hashCanvas=document.createElement('canvas');hashCanvas.width=9;hashCanvas.height=8;const hc=hashCanvas.getContext('2d',{willReadFrequently:true});hc.drawImage(img,0,0,9,8);const hd=hc.getImageData(0,0,9,8).data,bits=[];
+  const gridVec=[];for(const cell of grid){const div=Math.max(1,cell[3]);gridVec.push(cell[0]/div/255,cell[1]/div/255,cell[2]/div/255);}
+  const edge=Array(8).fill(0);let edgeTotal=0;
+  const lumAt=(x,y)=>gray[Math.max(0,Math.min(47,y))*48+Math.max(0,Math.min(47,x))];
+  for(let y=1;y<47;y++)for(let x=1;x<47;x++){
+    const dx=lumAt(x+1,y)-lumAt(x-1,y),dy=lumAt(x,y+1)-lumAt(x,y-1),mag=Math.hypot(dx,dy);if(mag<18)continue;
+    let a=Math.atan2(dy,dx);if(a<0)a+=Math.PI*2;const bin=Math.min(7,Math.floor(a/(Math.PI*2)*8));edge[bin]+=mag;edgeTotal+=mag;
+  }
+  if(edgeTotal)for(let i=0;i<edge.length;i++)edge[i]/=edgeTotal;
+  const hashCanvas=document.createElement('canvas');hashCanvas.width=9;hashCanvas.height=8;const hc=hashCanvas.getContext('2d',{willReadFrequently:true});hc.drawImage(img,sx,sy,sw,sh,0,0,9,8);const hd=hc.getImageData(0,0,9,8).data,bits=[];
   const lum=i=>.299*hd[i]+.587*hd[i+1]+.114*hd[i+2];for(let y=0;y<8;y++)for(let x=0;x<8;x++){const i=(y*9+x)*4,j=(y*9+x+1)*4;bits.push(lum(i)>lum(j)?'1':'0');}
-  return{avg:[Math.round(r),Math.round(g),Math.round(b)],hist:hist.map(x=>Number(x.toFixed(4))),hash:bits.join(''),aspect:Number((img.naturalWidth/Math.max(1,img.naturalHeight)).toFixed(3))};
+  const ah=document.createElement('canvas');ah.width=8;ah.height=8;const ac=ah.getContext('2d',{willReadFrequently:true});ac.drawImage(img,sx,sy,sw,sh,0,0,8,8);const ad=ac.getImageData(0,0,8,8).data,al=[];for(let i=0;i<ad.length;i+=4)al.push(.299*ad[i]+.587*ad[i+1]+.114*ad[i+2]);const am=al.reduce((s,v)=>s+v,0)/al.length,abits=al.map(v=>v>am?'1':'0').join('');
+  return{avg:[Math.round(r),Math.round(g),Math.round(b)],hist:hist.map(x=>Number(x.toFixed(4))),hash:bits.join(''),ahash:abits,grid:gridVec.map(x=>Number(x.toFixed(4))),edge:edge.map(x=>Number(x.toFixed(4))),aspect:Number((sw/Math.max(1,sh)).toFixed(3)),crop:c};
 }
-async function quickFindFeatureFromBlob(blob){const img=await blobToImage(blob);return quickFindFeatureFromImage(img);}
+async function quickFindFeatureFromBlob(blob,crop=null){const img=await blobToImage(blob);return quickFindFeatureFromImage(img,crop||quickFindAutoSubjectBox(img));}
 async function storedQuickFindFeature(imageId){
   if(!imageId)return null;if(quickFindVisualCache.has(imageId))return quickFindVisualCache.get(imageId);
-  const rec=await idbGet('images',imageId);if(!rec?.data)return null;if(rec.quickFindFeature){quickFindVisualCache.set(imageId,rec.quickFindFeature);return rec.quickFindFeature;}
+  const rec=await idbGet('images',imageId);if(!rec?.data)return null;
+  if(rec.quickFindFeature?.grid&&rec.quickFindFeature?.edge&&rec.quickFindFeature?.ahash){quickFindVisualCache.set(imageId,rec.quickFindFeature);return rec.quickFindFeature;}
   const feature=await quickFindFeatureFromBlob(new Blob([rec.data],{type:rec.mime||'image/jpeg'}));rec.quickFindFeature=feature;await idbPut('images',rec);quickFindVisualCache.set(imageId,feature);return feature;
 }
 function quickFindHamming(a='',b=''){if(!a||!b||a.length!==b.length)return .5;let diff=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])diff++;return 1-diff/a.length;}
+function quickFindVectorSimilarity(a=[],b=[]){if(!a.length||a.length!==b.length)return .5;let diff=0;for(let i=0;i<a.length;i++)diff+=Math.abs(a[i]-(b[i]||0));return Math.max(0,1-diff/a.length);}
+function quickFindVisualSignature(f){return`${f.hash||''}|${f.ahash||''}|${Number(f.aspect||0).toFixed(2)}`;}
 function quickFindVisualSimilarity(a,b){
   const colorDist=Math.sqrt(a.avg.reduce((s,v,i)=>s+(v-b.avg[i])**2,0))/441.7,color=Math.max(0,1-colorDist);
-  const hist=Math.max(0,1-a.hist.reduce((s,v,i)=>s+Math.abs(v-(b.hist[i]||0)),0)/2),hash=quickFindHamming(a.hash,b.hash);
-  const aspect=Math.max(0,1-Math.min(1,Math.abs(Math.log(Math.max(.05,a.aspect)/Math.max(.05,b.aspect)))/1.25));
-  const score=100*(hash*.4+color*.28+hist*.22+aspect*.10),reasons=[];
-  if(hash>.72)reasons.push({label:'整体视觉',value:'包装纹理/结构接近'});if(color>.82)reasons.push({label:'包装主色',value:'颜色接近'});if(hist>.86)reasons.push({label:'明暗分布',value:'明暗结构接近'});if(aspect>.9)reasons.push({label:'外形比例',value:'长宽比例接近'});
-  return{score:Math.round(score),reasons:reasons.slice(0,3),parts:{hash,color,hist,aspect}};
+  const hist=Math.max(0,1-a.hist.reduce((s,v,i)=>s+Math.abs(v-(b.hist[i]||0)),0)/2);
+  const dhash=quickFindHamming(a.hash,b.hash),ahash=quickFindHamming(a.ahash,b.ahash),grid=quickFindVectorSimilarity(a.grid,b.grid),edge=quickFindVectorSimilarity(a.edge,b.edge);
+  const aspect=Math.max(0,1-Math.min(1,Math.abs(Math.log(Math.max(.05,a.aspect)/Math.max(.05,b.aspect)))/1.2));
+  const score=100*(dhash*.22+ahash*.12+grid*.28+edge*.16+color*.10+hist*.05+aspect*.07),reasons=[];
+  if(grid>.76)reasons.push({label:'包装布局',value:'分区颜色/结构接近'});if(dhash>.72||ahash>.72)reasons.push({label:'整体视觉',value:'轮廓/纹理接近'});if(edge>.76)reasons.push({label:'边缘结构',value:'包装线条接近'});if(color>.84)reasons.push({label:'包装主色',value:'颜色接近'});if(aspect>.92)reasons.push({label:'外形比例',value:'长宽比例接近'});
+  return{score:Math.round(score),reasons:reasons.slice(0,4),parts:{dhash,ahash,grid,edge,color,hist,aspect}};
 }
 async function quickFindMapLimit(list,limit,worker,onProgress){let next=0,done=0;const out=new Array(list.length);async function run(){while(true){const i=next++;if(i>=list.length)return;try{out[i]=await worker(list[i],i);}catch(e){console.warn('quick find visual item skipped',e);out[i]=null;}done++;if(onProgress)onProgress(done,list.length);await new Promise(r=>setTimeout(r,0));}}await Promise.all(Array.from({length:Math.min(limit,list.length||1)},run));return out;}
 function quickFindAmbiguous(results=[]){return results.length>1&&Math.abs(results[0].score-results[1].score)<=7;}
@@ -476,7 +623,7 @@ function quickFindCandidateHTML(result){
 function renderQuickFindResults(){
   const root=$('#quickFindResults'),status=$('#quickFindStatus');if(!root||!status)return;
   status.textContent=quickFindState.status||'';const results=quickFindState.results||[];
-  if(quickFindState.mode==='idle'){root.innerHTML='';return;}
+  if(quickFindState.mode==='idle'||quickFindState.mode==='photo-ready'){root.innerHTML='';return;}
   if(quickFindState.mode==='loading'){root.innerHTML='<div class="quick-find-loading"><span></span><b>正在本机查找…</b></div>';return;}
   if(!results.length){root.innerHTML='<div class="quick-find-none"><b>没有找到可靠候选</b><p>可以换关键词/角度再试，或直接新建产品。</p><button type="button" data-qf-new>＋ 新建产品</button></div>';return;}
   const selected=quickFindState.selectedId?products.find(p=>p.id===quickFindState.selectedId):null;
@@ -485,22 +632,60 @@ function renderQuickFindResults(){
   root.innerHTML=`${selection}${ambiguity}<div class="quick-find-result-list">${results.map(quickFindCandidateHTML).join('')}</div><div class="quick-find-footer"><button class="secondary" type="button" data-qf-none>都不是这些</button><button type="button" data-qf-new>＋ 新建产品</button></div>`;activateLazyImages();
 }
 function clearQuickFind(){
-  quickFindState={mode:'idle',query:'',results:[],selectedId:'',status:'',progress:0};if($('#quickFindText'))$('#quickFindText').value='';if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').value='';if(quickFindPhotoUrl){URL.revokeObjectURL(quickFindPhotoUrl);quickFindPhotoUrl='';}if($('#quickFindPhotoWrap'))$('#quickFindPhotoWrap').hidden=true;renderQuickFindResults();
+  quickFindState={mode:'idle',query:'',results:[],selectedId:'',status:'',progress:0};if($('#quickFindText'))$('#quickFindText').value='';if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').value='';
+  if(quickFindPhotoUrl){URL.revokeObjectURL(quickFindPhotoUrl);quickFindPhotoUrl='';}
+  quickFindPhotoFile=null;quickFindPhotoImage=null;quickFindCropRect={x:0,y:0,width:100,height:100};quickFindCropDrag=null;
+  if($('#quickFindPhotoWrap'))$('#quickFindPhotoWrap').hidden=true;if($('#quickFindCropEditor'))$('#quickFindCropEditor').hidden=true;renderQuickFindResults();
 }
 function runQuickFindText(query){
   const q=String(query||'').trim();if(!q){quickFindState={mode:'idle',query:'',results:[],selectedId:'',status:'',progress:0};renderQuickFindResults();return;}
-  const results=quickFindTextSearch(q);quickFindState={mode:'text',query:q,results,selectedId:'',status:results.length?`找到 ${results.length} 个关键词候选；请从候选中确认你要找的产品。`:'没有找到关键词候选。',progress:100};renderQuickFindResults();
+  const results=quickFindTextSearch(q);quickFindState={mode:'text',query:q,results,selectedId:'',status:results.length?`找到 ${results.length} 个概念/关键词候选；请从候选中确认你要找的产品。`:'没有找到关键词候选。可尝试“粉色腮红 / 灰棕眼影 / 适合我的裸色口红”等描述。',progress:100};renderQuickFindResults();
 }
-async function runQuickFindPhoto(file){
-  if(!file)return;quickFindState={mode:'loading',query:file.name||'photo',results:[],selectedId:'',status:'正在分析查询图片…',progress:0};renderQuickFindResults();
+function quickFindDrawCropCanvas(){
+  const canvas=$('#quickFindCropCanvas');if(!canvas||!quickFindPhotoImage)return;
+  const img=quickFindPhotoImage,maxW=720,scale=Math.min(1,maxW/img.naturalWidth),w=Math.round(img.naturalWidth*scale),h=Math.round(img.naturalHeight*scale);canvas.width=w;canvas.height=h;
+  const ctx=canvas.getContext('2d');ctx.clearRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);
+  const r=safeCrop(quickFindCropRect);ctx.fillStyle='rgba(0,0,0,.38)';ctx.fillRect(0,0,w,h);ctx.save();ctx.beginPath();ctx.rect(w*r.x/100,h*r.y/100,w*r.width/100,h*r.height/100);ctx.clip();ctx.drawImage(img,0,0,w,h);ctx.restore();
+  ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.strokeRect(w*r.x/100,h*r.y/100,w*r.width/100,h*r.height/100);ctx.strokeStyle='#9a6d68';ctx.lineWidth=1;ctx.strokeRect(w*r.x/100+2,h*r.y/100+2,Math.max(1,w*r.width/100-4),Math.max(1,h*r.height/100-4));
+}
+async function prepareQuickFindPhoto(file){
+  if(!file)return;quickFindPhotoFile=file;
   if(quickFindPhotoUrl)URL.revokeObjectURL(quickFindPhotoUrl);quickFindPhotoUrl=URL.createObjectURL(file);if($('#quickFindPhotoPreview'))$('#quickFindPhotoPreview').src=quickFindPhotoUrl;if($('#quickFindPhotoWrap'))$('#quickFindPhotoWrap').hidden=false;
+  quickFindPhotoImage=await fileToImage(file);quickFindCropRect=quickFindAutoSubjectBox(quickFindPhotoImage);if($('#quickFindCropEditor'))$('#quickFindCropEditor').hidden=false;quickFindDrawCropCanvas();
+  quickFindState={mode:'photo-ready',query:file.name||'photo',results:[],selectedId:'',status:'已自动框出主体。可以拖动重新框选，再点击“用框选区域查找”。',progress:0};renderQuickFindResults();
+}
+function quickFindCropPoint(ev){
+  const canvas=$('#quickFindCropCanvas'),rect=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(100,(ev.clientX-rect.left)/rect.width*100)),y:Math.max(0,Math.min(100,(ev.clientY-rect.top)/rect.height*100))};
+}
+function quickFindCropPointerDown(ev){if(!quickFindPhotoImage)return;ev.preventDefault();const p=quickFindCropPoint(ev);quickFindCropDrag={start:p,current:p};ev.currentTarget.setPointerCapture?.(ev.pointerId);}
+function quickFindCropPointerMove(ev){if(!quickFindCropDrag)return;ev.preventDefault();quickFindCropDrag.current=quickFindCropPoint(ev);const a=quickFindCropDrag.start,b=quickFindCropDrag.current;quickFindCropRect={x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.abs(a.x-b.x),height:Math.abs(a.y-b.y)};if(quickFindCropRect.width<2)quickFindCropRect.width=2;if(quickFindCropRect.height<2)quickFindCropRect.height=2;quickFindDrawCropCanvas();}
+function quickFindCropPointerUp(ev){if(!quickFindCropDrag)return;quickFindCropPointerMove(ev);quickFindCropDrag=null;}
+async function quickFindQueryFeature(){
+  if(!quickFindPhotoImage)throw new Error('no query image');
+  return quickFindFeatureFromImage(quickFindPhotoImage,quickFindCropRect);
+}
+async function runQuickFindPhoto(){
+  if(!quickFindPhotoFile||!quickFindPhotoImage)return;
+  quickFindState={mode:'loading',query:quickFindPhotoFile.name||'photo',results:[],selectedId:'',status:'正在分析框选主体并比较本机库存…',progress:0};renderQuickFindResults();
   try{
-    const queryFeature=await quickFindFeatureFromBlob(file),candidates=products.map(product=>({product,imageId:imageSlots(product).primaryImageId})).filter(x=>x.imageId);
+    const queryFeature=await quickFindQueryFeature(),hint=String($('#quickFindText')?.value||'').trim();
+    const hintResults=hint?quickFindTextSearch(hint,200):[],hintMap=new Map(hintResults.map(r=>[r.product.id,r.score]));
+    let candidates=products.map(product=>({product,imageId:imageSlots(product).primaryImageId})).filter(x=>x.imageId);
+    if(hintResults.length>=2){const allowed=new Set(hintResults.map(r=>r.product.id));const filtered=candidates.filter(x=>allowed.has(x.product.id));if(filtered.length)candidates=filtered;}
     if(!candidates.length){quickFindState={mode:'photo',query:'',results:[],selectedId:'',status:'库存中还没有可用于照片匹配的产品图片。',progress:100};renderQuickFindResults();return;}
-    const raw=await quickFindMapLimit(candidates,5,async entry=>{const f=await storedQuickFindFeature(entry.imageId);if(!f)return null;const sim=quickFindVisualSimilarity(queryFeature,f);return{product:entry.product,score:sim.score,reasons:sim.reasons};},(done,total)=>{quickFindState.status=`首次/增量建立本地视觉指纹并比较：${done} / ${total}`;const s=$('#quickFindStatus');if(s)s.textContent=quickFindState.status;});
-    const results=raw.filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,12);const top=results[0]?.score||0,filtered=top>=45?results.filter(r=>r.score>=Math.max(32,top-24)):results.slice(0,8);
-    quickFindState={mode:'photo',query:file.name||'photo',results:filtered,selectedId:'',status:`本地照片查找完成：返回 ${filtered.length} 个最相似候选。仅比较你的 Cabinet 图片，不识别互联网产品。`,progress:100};renderQuickFindResults();
-  }catch(e){console.error(e);quickFindState={mode:'photo',query:'',results:[],selectedId:'',status:'照片查找失败，请换一张更清楚、主体更完整的照片。',progress:100};renderQuickFindResults();}
+    const raw=await quickFindMapLimit(candidates,5,async entry=>{const f=await storedQuickFindFeature(entry.imageId);if(!f)return null;const sim=quickFindVisualSimilarity(queryFeature,f);return{product:entry.product,imageId:entry.imageId,feature:f,visualScore:sim.score,score:sim.score,reasons:sim.reasons};},(done,total)=>{quickFindState.status=`本地视觉比较：${done} / ${total}`;const s=$('#quickFindStatus');if(s)s.textContent=quickFindState.status;});
+    const valid=raw.filter(Boolean),sigCount=new Map();for(const r of valid){const sig=quickFindVisualSignature(r.feature);sigCount.set(sig,(sigCount.get(sig)||0)+1);r.signature=sig;}
+    for(const r of valid){
+      const dup=sigCount.get(r.signature)||1,textScore=hintMap.get(r.product.id)||0;
+      let score=r.visualScore;if(hint)score=score*.76+textScore*.24;
+      if(dup>1){score-=Math.min(28,(dup-1)*8);r.reasons.push({label:'库存图片',value:'多件产品共享同一/近似合照，视觉区分度较低'});}
+      if(hint&&textScore)r.reasons.unshift({label:'关键词辅助',value:`${hint} · ${Math.round(textScore)}%`});
+      r.score=Math.max(0,Math.round(score));
+    }
+    const results=valid.sort((a,b)=>b.score-a.score).slice(0,12),top=results[0]?.score||0,filtered=top>=45?results.filter(r=>r.score>=Math.max(30,top-25)):results.slice(0,8);
+    const shared=filtered.filter(r=>(sigCount.get(r.signature)||1)>1).length;
+    quickFindState={mode:'photo',query:quickFindPhotoFile.name||'photo',results:filtered,selectedId:'',status:`本地照片查找完成：返回 ${filtered.length} 个候选${hint?'（已结合关键词）':''}。${shared?`其中 ${shared} 个候选使用共享合照，视觉结果需更谨慎。`:''}`,progress:100};renderQuickFindResults();
+  }catch(e){console.error(e);quickFindState={mode:'photo',query:'',results:[],selectedId:'',status:'照片查找失败，请重新框选产品主体或换一张更清楚的照片。',progress:100};renderQuickFindResults();}
 }
 function quickFindDismiss(id){quickFindState.results=(quickFindState.results||[]).filter(r=>r.product.id!==id);if(quickFindState.selectedId===id)quickFindState.selectedId='';renderQuickFindResults();}
 function categoryFamily(cat=''){
@@ -1012,8 +1197,13 @@ function bindEvents(){
   if($('#homeScanBtn'))$('#homeScanBtn').addEventListener('click',()=>tab('scan'));
   $('#addBtn').addEventListener('click',()=>openProductForm());
   if($('#quickFindText'))$('#quickFindText').addEventListener('input',e=>{clearTimeout(quickFindInputTimer);quickFindInputTimer=setTimeout(()=>runQuickFindText(e.target.value),120);});
-  if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)runQuickFindPhoto(f);e.target.value='';});
+  if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').addEventListener('change',async e=>{const f=e.target.files?.[0];if(f){try{await prepareQuickFindPhoto(f);}catch(err){console.error(err);toast('图片读取失败');}}e.target.value='';});
   if($('#quickFindClearBtn'))$('#quickFindClearBtn').addEventListener('click',clearQuickFind);
+  if($('#quickFindPhotoSearchBtn'))$('#quickFindPhotoSearchBtn').addEventListener('click',runQuickFindPhoto);
+  if($('#quickFindFullCropBtn'))$('#quickFindFullCropBtn').addEventListener('click',()=>{quickFindCropRect={x:0,y:0,width:100,height:100};quickFindDrawCropCanvas();});
+  if($('#quickFindAutoCropBtn'))$('#quickFindAutoCropBtn').addEventListener('click',()=>{if(quickFindPhotoImage){quickFindCropRect=quickFindAutoSubjectBox(quickFindPhotoImage);quickFindDrawCropCanvas();}});
+  if($('#quickFindCropCanvas')){const c=$('#quickFindCropCanvas');c.addEventListener('pointerdown',quickFindCropPointerDown);c.addEventListener('pointermove',quickFindCropPointerMove);c.addEventListener('pointerup',quickFindCropPointerUp);c.addEventListener('pointercancel',()=>{quickFindCropDrag=null;});}
+
   $('#closeModalBtn').addEventListener('click',closeModal);
   $('#exportBtn').addEventListener('click',exportBackup);
   $('#homeBackupBtn').addEventListener('click',exportBackup);

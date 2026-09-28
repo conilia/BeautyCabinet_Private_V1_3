@@ -14,14 +14,14 @@
   <meta name="beauty-ai-endpoint" content="">
   <link rel="manifest" href="manifest.webmanifest?v=1740">
   <link rel="stylesheet" href="styles.css?v=1740">
-  <title>Beauty Cabinet V1.7.4 Quick Find</title>
+  <title>Beauty Cabinet V1.7.5 Quick Find</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.7.4 · Quick Find + Local Cabinet</div>
+    <div class="sub">V1.7.5 · Semantic + Visual Quick Find</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
@@ -72,13 +72,18 @@
     </div>
     <div class="quick-find card" id="quickFindCard">
       <div class="title"><h3>Quick Find · 快速查找</h3><span class="status-badge">LOCAL</span></div>
-      <p class="note">在自己的 Cabinet 中快速找产品。关键词搜索支持品牌、产品名、色号、类别、颜色、质地、妆效、适配、用法和备注；拍照查找只比较本机已有产品图片，不会上传或联网识别。</p>
+      <p class="note">在自己的 Cabinet 中快速找产品。支持中英双语概念搜索，例如“粉色腮红 / 灰棕眼影 / 适合我的裸色口红”；拍照查找只比较本机已有产品图片，不上传、不联网识别。</p>
       <div class="quick-find-controls">
-        <input id="quickFindText" type="search" enterkeyhint="search" autocomplete="off" placeholder="例如 KIKO 329、灰棕眼影、很适合我、快过期…">
+        <input id="quickFindText" type="search" enterkeyhint="search" autocomplete="off" placeholder="例如 粉色腮红、KIKO 329、灰棕眼影、不显气色的裸色口红…">
         <label class="quick-find-photo" for="quickFindPhotoInput">📷 拍照 / 选图<input id="quickFindPhotoInput" type="file" accept="image/*"></label>
         <button id="quickFindClearBtn" class="secondary" type="button">清除</button>
       </div>
-      <div id="quickFindPhotoWrap" class="quick-find-photo-preview" hidden><img id="quickFindPhotoPreview" alt="Quick Find 查询图片"><div><b>仅本地视觉匹配</b><span>第一次照片搜索会为已有库存图片建立本地视觉指纹，后续会更快。</span></div></div>
+      <div id="quickFindPhotoWrap" class="quick-find-photo-preview" hidden><img id="quickFindPhotoPreview" alt="Quick Find 查询图片"><div><b>仅本地视觉匹配</b><span>V1.7.5 会先框选主体，再比较包装布局、边缘、颜色与比例。可同时输入品牌/类别关键词辅助缩小范围。</span></div></div>
+      <div id="quickFindCropEditor" class="quick-find-crop-editor" hidden>
+        <div class="quick-find-crop-head"><div><b>框选要找的产品</b><span>拖动白框重新选择主体；背景越少，匹配通常越准。</span></div><button id="quickFindAutoCropBtn" class="secondary" type="button">自动主体</button></div>
+        <canvas id="quickFindCropCanvas" aria-label="Quick Find crop editor"></canvas>
+        <div class="toolbar"><button id="quickFindPhotoSearchBtn" type="button">用框选区域查找</button><button id="quickFindFullCropBtn" class="secondary" type="button">使用整张图</button></div>
+      </div>
       <div id="quickFindStatus" class="quick-find-status" aria-live="polite"></div>
       <div id="quickFindResults"></div>
     </div>
