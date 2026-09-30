@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.8.3';
+const APP_VERSION = '1.8.5';
 const DB_NAME = 'beauty-cabinet-local-v15';
 const DB_VERSION = 2;
 const AI_CONTRACT_VERSION = 1;
@@ -251,6 +251,8 @@ async function resetSkinProfile(){if(!confirm('清空这台设备上的 My Skin 
 
 let db = null;
 let products = [];
+let duplicateWatchFilter='high';
+let duplicateWatchCache={key:'',pairs:null};
 let scanSessions = [];
 let activeScanId = '';
 let imageUrls = new Map();
@@ -584,6 +586,7 @@ function tab(id) {
   window.scrollTo({top:0,behavior:'auto'});
   if(id==='scan') renderScanShelf();
   if(id==='profile'){renderSkinProfile();renderPersonalRecommendations();}
+  if(id==='duplicates') renderDuplicateWatch();
 }
 function attentionInfo(p) {
   if (p.status === '停止使用') return {level:'bad', label:'停止使用'};
@@ -598,7 +601,7 @@ function attentionInfo(p) {
   if (!p.opened && p.form === 'Cream') return {level:'warn',label:'年龄未知 · 定期检查'};
   return {level:'good',label:'状态检查管理'};
 }
-function renderAll(){renderHome();renderProducts();renderExpiry();renderScanShelf();renderQuickFindResults();renderSkinProfile();renderPersonalRecommendations();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
+function renderAll(){renderHome();renderProducts();renderExpiry();renderScanShelf();renderQuickFindResults();renderSkinProfile();renderPersonalRecommendations();renderDuplicateWatch();renderDuplicateWatchEntry();if($('#aiConfigStatus'))$('#aiConfigStatus').textContent=aiProxyEndpoint?'OFF until per-scan consent · secure proxy configured':'OFF · secure proxy not configured';if($('#aiEndpointInput'))$('#aiEndpointInput').value=aiProxyEndpoint||'';}
 function renderHome(){
   $('#count').textContent=products.length;
   $('#imageCount').textContent=new Set(products.flatMap(productImageIds)).size;
@@ -850,7 +853,7 @@ function renderQuickFindResults(){
   if(quickFindState.mode==='loading'){root.innerHTML='<div class="quick-find-loading"><span></span><b>正在本机查找…</b></div>';return;}
   if(!results.length){root.innerHTML='<div class="quick-find-none"><b>没有找到可靠候选</b><p>可以换关键词/角度再试，或直接新建产品。</p><button type="button" data-qf-new>＋ 新建产品</button></div>';return;}
   const selected=quickFindState.selectedId?products.find(p=>p.id===quickFindState.selectedId):null;
-  const selection=selected?`<div class="quick-find-selected"><b>✓ 已选择：${esc(selected.brand?`${selected.brand} · `:'')}${esc(selected.name)}</b>${selected.shade?`<span>${esc(selected.shade)}</span>`:''}${selected.role?`<p>${esc(selected.role)}</p>`:''}<div class="toolbar"><button class="secondary" type="button" data-qf-details="${esc(selected.id)}">查看完整档案</button><button class="secondary" type="button" data-qf-edit="${esc(selected.id)}">编辑</button></div></div>`:'';
+  const selection=selected?`<div class="quick-find-selected"><b>✓ 已选择：${esc(selected.brand?`${selected.brand} · `:'')}${esc(selected.name)}</b>${selected.shade?`<span>${esc(selected.shade)}</span>`:''}${selected.role?`<p>${esc(selected.role)}</p>`:''}<div class="toolbar"><button class="secondary" type="button" data-qf-details="${esc(selected.id)}">查看完整档案</button><button class="secondary" type="button" data-qf-edit="${esc(selected.id)}">编辑</button></div>${quickFindSelectedRelationshipsHTML(selected)}</div>`:'';
   const ambiguity=quickFindAmbiguous(results)?'<div class="quick-find-ambiguity"><b>有多个相似候选，请确认</b><span>Quick Find 不会替你自动选择。</span></div>':'';
   root.innerHTML=`${selection}${ambiguity}<div class="quick-find-result-list">${results.map(quickFindCandidateHTML).join('')}</div><div class="quick-find-footer"><button class="secondary" type="button" data-qf-none>都不是这些</button><button type="button" data-qf-new>＋ 新建产品</button></div>`;activateLazyImages();
 }
@@ -1072,6 +1075,46 @@ function relationshipSectionsHTML(p,insights=relationshipInsights(p)){
   return `<div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Similar & Duplicates</b><span>自动扫描整个 Cabinet，并分别显示三种重复关系</span></div><span class="status-badge">LOCAL</span></div>${dup}</div><div class="card relationship-auto-card"><div class="relationship-auto-head"><div><b>Works Best With · 和什么搭</b><span>按类别、颜色、质地和你的适配记录自动推荐</span></div><span class="status-badge">LOCAL</span></div>${pair}</div>${rescue}`;
 }
 
+function duplicateWatchKey(){return products.map(p=>[p.id,p.brand,p.name,p.shade,p.cat,p.form,p.fit,p.myResult,p.role,p.status,...Object.values(p.attributes||{})].join('¦')).join('§');}
+function duplicateWatchPairs(){
+  const key=duplicateWatchKey();if(duplicateWatchCache.key===key&&duplicateWatchCache.pairs)return duplicateWatchCache.pairs;
+  const buckets=new Map();for(const p of products){const k=recCategory(p);if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(p);}
+  const pairs=[];
+  for(const arr of buckets.values())for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){
+    const a=arr[i],b=arr[j],rel=analyzeRelation(a,b);if(rel.kind==='unique')continue;
+    const high=rel.kind==='true'||(rel.kind==='color'&&rel.score>=82)||(rel.kind==='functional'&&rel.score>=92);
+    const color=rel.kind==='color'&&rel.score>=70;
+    const functional=rel.kind==='functional'&&rel.score>=82;
+    if(high||color||functional||rel.kind==='true')pairs.push({a,b,rel,high,color,functional});
+  }
+  duplicateWatchCache={key,pairs};return pairs;
+}
+function duplicateWatchGroups(filter='high'){
+  const all=duplicateWatchPairs(),selected=all.filter(e=>filter==='all'||(filter==='high'&&e.high)||(filter==='color'&&(e.color||e.rel.kind==='true'))||(filter==='functional'&&e.functional));
+  const adj=new Map();for(const e of selected){if(!adj.has(e.a.id))adj.set(e.a.id,[]);if(!adj.has(e.b.id))adj.set(e.b.id,[]);adj.get(e.a.id).push({id:e.b.id,edge:e});adj.get(e.b.id).push({id:e.a.id,edge:e});}
+  const seen=new Set(),groups=[];
+  for(const id of adj.keys()){if(seen.has(id))continue;const stack=[id],ids=new Set(),edges=new Set();seen.add(id);while(stack.length){const cur=stack.pop();ids.add(cur);for(const n of adj.get(cur)||[]){edges.add(n.edge);if(!seen.has(n.id)){seen.add(n.id);stack.push(n.id);}}}
+    const ps=[...ids].map(x=>products.find(p=>p.id===x)).filter(Boolean),es=[...edges];if(ps.length>1)groups.push({products:ps,edges:es,maxScore:Math.max(...es.map(e=>e.rel.score)),kinds:new Set(es.map(e=>e.rel.kind))});}
+  return groups.sort((a,b)=>b.maxScore-a.maxScore||b.products.length-a.products.length);
+}
+function duplicateWatchTierValue(p){const r=personalRecommendation(p),map={excellent:5,good:4,conditional:3,caution:2,unknown:1,low:0};return map[r.tier]??1;}
+function duplicateWatchUsePriority(p){const a=attentionInfo(p);if(p.status==='停止使用')return -99;if(p.status==='优先用完')return 8;if(a.level==='warn')return 6;if(p.opened){const t=Date.parse(p.opened);return Number.isFinite(t)?Math.max(0,5-(Date.now()-t)/31557600000):0;}return 0;}
+function duplicateWatchGroupSummary(g){
+  const best=[...g.products].sort((a,b)=>duplicateWatchTierValue(b)-duplicateWatchTierValue(a))[0];
+  const usable=g.products.filter(p=>p.status!=='停止使用').sort((a,b)=>duplicateWatchUsePriority(b)-duplicateWatchUsePriority(a));
+  const first=usable[0]||null,topEdge=[...g.edges].sort((a,b)=>b.rel.score-a.rel.score)[0],ex=topEdge?relationExplanation(topEdge.a,{relation:topEdge.rel}):{same:'',different:''};
+  return {best,first,ex};
+}
+function duplicateWatchProductRow(p){const img=imageSlots(p).primaryImageId,r=personalRecommendation(p),label=RECOMMENDATION_LABELS[r.tier]?.label||'信息不足',att=attentionInfo(p);return `<button class="duplicate-watch-product" type="button" data-product-id="${esc(p.id)}">${img?`<img alt="" data-image-id="${esc(img)}">`:'<span class="duplicate-watch-product-img placeholder">✦</span>'}<span><b>${esc(p.brand?`${p.brand} · `:'')}${esc(p.name)}</b><small>${esc(p.shade||p.cat||'')}</small><em>${esc(label)} · ${esc(att.label)}</em></span></button>`;}
+function duplicateWatchGroupCard(g,index){const s=duplicateWatchGroupSummary(g),kindLabels=[...g.kinds].map(k=>k==='true'?'True Duplicate':k==='color'?'Color Duplicate':'Functional Duplicate');const buyNote=g.kinds.has('true')?'你已经有高度相同的产品；再次购买同款前建议先检查这一组。':g.kinds.has('color')?'这些产品颜色重合度较高；购买相近色号前建议先比较质地和妆效差异。':'这些产品承担相近功能；购买同类新品前先确认是否真的增加了新的用途。';return `<article class="duplicate-watch-group"><div class="duplicate-watch-group-head"><div><span class="duplicate-watch-index">${index+1}</span><b>${esc(recCategoryLabel(recCategory(g.products[0])))} · ${g.products.length} 件</b><small>${esc(kindLabels.join(' + '))}</small></div><span class="relation-badge">最高 ${g.maxScore}%</span></div><div class="duplicate-watch-warning">🛍️ ${esc(buyNote)}</div><div class="duplicate-watch-products">${g.products.map(duplicateWatchProductRow).join('')}</div><div class="duplicate-watch-analysis"><div><b>为什么相似</b><span>${esc(s.ex.same||'相似度来自类别、颜色、质地或功能的重合。')}</span></div><div><b>关键区别</b><span>${esc(s.ex.different||'当前记录的差异信息不足。')}</span></div>${s.best?`<div><b>更匹配你的档案</b><span>${esc(s.best.brand?`${s.best.brand} · `:'')}${esc(s.best.name)}</span></div>`:''}${s.first?`<div><b>优先检查 / 使用</b><span>${esc(s.first.brand?`${s.first.brand} · `:'')}${esc(s.first.name)}${s.first.status==='停止使用'?' · 已停止使用':' '}</span></div>`:''}</div></article>`;}
+function renderDuplicateWatchEntry(){
+  const root=$('#duplicateWatchEntryStats');if(!root)return;
+  if(!products.length){root.innerHTML='<span class="note">录入产品后会自动生成全局重复预警。</span>';return;}
+  const high=duplicateWatchGroups('high').length,color=duplicateWatchGroups('color').length,functional=duplicateWatchGroups('functional').length,truePairs=duplicateWatchPairs().filter(x=>x.rel.kind==='true').length;
+  root.innerHTML=`<article><b>${high}</b><span>高重复组</span></article><article><b>${color}</b><span>同色重复组</span></article><article><b>${functional}</b><span>功能重复组</span></article><article><b>${truePairs}</b><span>True Duplicate 对</span></article>`;
+}
+function renderDuplicateWatch(){const list=$('#duplicateWatchList'),stats=$('#duplicateWatchStats');if(!list||!stats)return;const pairs=duplicateWatchPairs(),high=duplicateWatchGroups('high'),color=duplicateWatchGroups('color'),functional=duplicateWatchGroups('functional');stats.innerHTML=`<article><b>${high.length}</b><span>高重复组</span></article><article><b>${pairs.filter(x=>x.rel.kind==='true').length}</b><span>True Duplicate 对</span></article><article><b>${color.length}</b><span>同色重复组</span></article><article><b>${functional.length}</b><span>功能重复组</span></article>`;$$('[data-dup-filter]').forEach(b=>b.classList.toggle('active',b.dataset.dupFilter===duplicateWatchFilter));const groups=duplicateWatchGroups(duplicateWatchFilter);if(!products.length){list.innerHTML='<div class="empty-state">还没有产品可分析。</div>';return;}if(!groups.length){list.innerHTML='<div class="empty-state"><div class="empty-icon">✓</div><b>当前没有找到这一类高重复产品</b><p>随着库存增加或产品属性补充，Duplicate Watch 会自动更新。</p></div>';return;}list.innerHTML=groups.map(duplicateWatchGroupCard).join('');activateLazyImages();}
+
 function openModal(html){$('#modalBody').innerHTML=html;$('#modal').classList.add('open');$('#modal').setAttribute('aria-hidden','false');document.body.style.overflow='hidden';}
 function closeModal(){$('#modal').classList.remove('open');$('#modal').setAttribute('aria-hidden','true');document.body.style.overflow='';$('#modalBody').innerHTML='';}
 function selectOptions(values,current=''){return values.map(v=>`<option value="${esc(v)}" ${String(current)===String(v)?'selected':''}>${esc(v||'未记录')}</option>`).join('');}
@@ -1207,12 +1250,48 @@ function duplicateFlag(candidate){
   for(const p of products){const sameIdentity=norm(cp.brand)&&norm(cp.brand)===norm(p.brand)&&textSimilarity(cp.name,p.name)>=.75;if(sameIdentity){const differentShade=norm(cp.shade)&&norm(p.shade)&&norm(cp.shade)!==norm(p.shade);const flag={label:differentShade?'Same product, different shade':'Possible existing item',product:p,priority:differentShade?2:3};if(!best||flag.priority>best.priority)best=flag;continue;}const relation=analyzeRelation(cp,p);if(['true','color','functional'].includes(relation.kind)&&relation.score>=75){const flag={label:'Possible duplicate',product:p,priority:1};if(!best)best=flag;}}
   return best;
 }
+function scanCabinetMatches(candidate){
+  const cp=candidateAsProduct(candidate),duplicate=[],complementary=[];
+  for(const p of products){
+    const rel=analyzeRelation(cp,p);
+    if(rel.kind!=='unique'&&rel.score>=58)duplicate.push({product:p,relation:rel,score:rel.score,kind:rel.kind});
+    const pair=pairingScore(cp,p);
+    if(pair.score>=22&&rel.kind==='unique')complementary.push({product:p,score:Math.round(pair.score),reasons:pair.reasons,kind:'complementary'});
+  }
+  duplicate.sort((a,b)=>b.score-a.score);complementary.sort((a,b)=>b.score-a.score);
+  const high=duplicate.filter(x=>x.score>=82),trueDup=duplicate.filter(x=>x.kind==='true'),color=duplicate.filter(x=>x.kind==='color'),functional=duplicate.filter(x=>x.kind==='functional');
+  const out=[],seen=new Set();
+  const push=(x,label)=>{if(!x||seen.has(x.product.id))return;seen.add(x.product.id);out.push({...x,displayLabel:label});};
+  high.slice(0,2).forEach(x=>push(x,'High Overlap'));
+  trueDup.slice(0,2).forEach(x=>push(x,'True Duplicate'));
+  color.slice(0,2).forEach(x=>push(x,'Color Duplicate'));
+  functional.slice(0,2).forEach(x=>push(x,'Functional Duplicate'));
+  complementary.slice(0,2).forEach(x=>push(x,'Complementary'));
+  return out.slice(0,6);
+}
+function scanCabinetMatchesHTML(candidate){
+  const matches=scanCabinetMatches(candidate),cp=candidateAsProduct(candidate);
+  const hasInfo=!!(norm(cp.name)||norm(cp.brand)||(cp.cat&&cp.cat!=='Other')||Object.values(cp.attributes||{}).some(Boolean));
+  if(!hasInfo)return `<div class="scan-similar-box"><div class="scan-similar-head"><b>Similar in your Cabinet</b><span>待补充候选信息</span></div><p class="note">填写品牌、产品名、类别或颜色属性后，会自动显示相似/重复/互补产品。</p></div>`;
+  if(!matches.length)return `<div class="scan-similar-box"><div class="scan-similar-head"><b>Similar in your Cabinet</b><span>0</span></div><p class="note">当前没有发现可靠的相似或互补候选。</p></div>`;
+  return `<div class="scan-similar-box"><div class="scan-similar-head"><b>Similar in your Cabinet</b><span>${matches.length}</span></div><div class="scan-similar-list">${matches.map(x=>{const p=x.product,img=imageSlots(p).primaryImageId,detail=x.kind==='complementary'?(x.reasons||[]).slice(0,2).join('；'):relationExplanation(cp,x).same;return `<button type="button" class="scan-similar-item" data-related-product="${esc(p.id)}">${img?`<img alt="" data-image-id="${esc(img)}">`:'<span class="scan-similar-img placeholder">✦</span>'}<span><b>${esc(p.brand?`${p.brand} · `:'')}${esc(p.name)}</b><small>${esc(p.shade||p.cat||'')}</small><em>${esc(detail||'库存候选')}</em></span><i>${esc(x.displayLabel)}${Number.isFinite(x.score)?` · ${x.score}%`:''}</i></button>`;}).join('')}</div><p class="note">这些是候选关系，不会自动替你合并或选择。可点开查看 Product Passport。</p></div>`;
+}
+function quickFindSelectedRelationshipsHTML(p){
+  if(!p)return'';const i=relationshipInsights(p),rows=[];
+  const add=(x,label)=>{if(!x||rows.some(r=>r.p.id===x.product.id))return;rows.push({p:x.product,label,score:x.score});};
+  i.duplicateGroups.true.slice(0,1).forEach(x=>add(x,'True Duplicate'));
+  i.duplicateGroups.color.slice(0,2).forEach(x=>add(x,'Color Duplicate'));
+  i.duplicateGroups.functional.slice(0,1).forEach(x=>add(x,'Functional Duplicate'));
+  i.pairings.slice(0,1).forEach(x=>add(x,'Complementary / Works With'));
+  if(!rows.length)return'';
+  return `<div class="quick-find-related"><b>Similar in your Cabinet</b><div>${rows.slice(0,4).map(x=>`<button type="button" data-related-product="${esc(x.p.id)}"><span>${esc(x.p.brand?`${x.p.brand} · `:'')}${esc(x.p.name)}</span><small>${esc(x.label)}${Number.isFinite(x.score)?` · ${Math.round(x.score)}%`:''}</small></button>`).join('')}</div></div>`;
+}
 function identificationStatus(candidate){const ai=candidate.aiIdentification;if(candidate.unidentified||!ai||ai.status==='unidentified')return'unidentified';if(ai.status==='identified'&&candidate.name&&candidate.brand)return'identified';return'needs-confirmation';}
 function alternativeLabel(match={}){return[match.brand,match.productName||match.name,match.shade].filter(Boolean).join(' · ')||'Unnamed match';}
 function candidateCard(candidate){
   const flag=duplicateFlag(candidate),attrs=candidate.attributes||{},ai=candidate.aiIdentification||null,attrText=ATTRIBUTE_FIELDS.filter(([,k])=>attrs[k]).map(([l,k])=>`${l} ${attrs[k]}`).join(' · '),alternatives=Array.isArray(ai?.alternatives)?ai.alternatives:[];
   const aiInfo=ai?`<div class="ai-candidate-info"><b>AI Identification</b>${Number.isFinite(ai.confidence)?`<span class="identification-confidence">Identification confidence ${Math.round(ai.confidence*100)}%</span>`:''}${candidate.productLine?`<div>Product line/version: ${esc(candidate.productLine)}</div>`:''}${candidate.barcodeText?`<div>Visible barcode: ${esc(candidate.barcodeText)}</div>`:''}${candidate.batchCode?`<div>Batch/shade code: ${esc(candidate.batchCode)}</div>`:''}${candidate.packagingText?`<details><summary>Extracted packaging text</summary><p>${esc(candidate.packagingText)}</p></details>`:''}${alternatives.length?`<label>Alternative AI matches<select data-ai-alternative="${esc(candidate.id)}"><option value="">Keep current match</option>${alternatives.map((match,index)=>`<option value="${index}">${esc(alternativeLabel(match))}</option>`).join('')}</select></label>`:''}</div>`:'';
-  return `<article class="candidate-card ${candidate.unidentified?'candidate-unidentified':''}" data-candidate-id="${esc(candidate.id)}" data-identification-status="${identificationStatus(candidate)}"><div class="candidate-top">${candidate.cropImageId?`<img class="candidate-crop" alt="候选裁剪" data-image-id="${esc(candidate.cropImageId)}">`:'<div class="candidate-crop placeholder">✦</div>'}<div><label class="candidate-accept"><input type="checkbox" data-candidate-accept="${esc(candidate.id)}" ${candidate.accepted?'checked':''}>接受并导入</label><b>${esc(candidate.unidentified?'未识别产品':candidate.name||'待识别产品')}</b><div class="note">${esc(candidate.brand||'品牌待填')} · ${esc(candidate.cat||'Other')} · ${esc(candidate.shade||'色号待填')}</div><span class="confidence">Detection confidence ${Math.round(detectionConfidence(candidate)*100)}%</span>${ai&&Number.isFinite(ai.confidence)?`<span class="identification-confidence">Identification confidence ${Math.round(ai.confidence*100)}%</span>`:''}</div></div>${flag?`<div class="duplicate-flag"><b>${esc(flag.label)}</b><span>${esc(flag.product.name)}</span></div>`:''}${aiInfo}${attrText?`<p class="note">${esc(attrText)}</p>`:''}<div class="candidate-actions"><button class="secondary" type="button" data-candidate-action="edit" data-id="${esc(candidate.id)}">编辑</button><button class="secondary" type="button" data-candidate-action="unidentified" data-id="${esc(candidate.id)}">标记未识别</button><label class="scan-file-button small-button">Add bottom/side photo for this product<input type="file" accept="image/*" capture="environment" data-candidate-extra="${esc(candidate.id)}"></label><button class="danger" type="button" data-candidate-action="delete" data-id="${esc(candidate.id)}">删除误检</button></div><label class="merge-check"><input type="checkbox" data-candidate-merge="${esc(candidate.id)}">选择合并</label></article>`;
+  return `<article class="candidate-card ${candidate.unidentified?'candidate-unidentified':''}" data-candidate-id="${esc(candidate.id)}" data-identification-status="${identificationStatus(candidate)}"><div class="candidate-top">${candidate.cropImageId?`<img class="candidate-crop" alt="候选裁剪" data-image-id="${esc(candidate.cropImageId)}">`:'<div class="candidate-crop placeholder">✦</div>'}<div><label class="candidate-accept"><input type="checkbox" data-candidate-accept="${esc(candidate.id)}" ${candidate.accepted?'checked':''}>接受并导入</label><b>${esc(candidate.unidentified?'未识别产品':candidate.name||'待识别产品')}</b><div class="note">${esc(candidate.brand||'品牌待填')} · ${esc(candidate.cat||'Other')} · ${esc(candidate.shade||'色号待填')}</div><span class="confidence">Detection confidence ${Math.round(detectionConfidence(candidate)*100)}%</span>${ai&&Number.isFinite(ai.confidence)?`<span class="identification-confidence">Identification confidence ${Math.round(ai.confidence*100)}%</span>`:''}</div></div>${flag?`<div class="duplicate-flag"><b>${esc(flag.label)}</b><span>${esc(flag.product.name)}</span></div>`:''}${aiInfo}${attrText?`<p class="note">${esc(attrText)}</p>`:''}${scanCabinetMatchesHTML(candidate)}<div class="candidate-actions"><button class="secondary" type="button" data-candidate-action="edit" data-id="${esc(candidate.id)}">编辑</button><button class="secondary" type="button" data-candidate-action="unidentified" data-id="${esc(candidate.id)}">标记未识别</button><label class="scan-file-button small-button">Add bottom/side photo for this product<input type="file" accept="image/*" capture="environment" data-candidate-extra="${esc(candidate.id)}"></label><button class="danger" type="button" data-candidate-action="delete" data-id="${esc(candidate.id)}">删除误检</button></div><label class="merge-check"><input type="checkbox" data-candidate-merge="${esc(candidate.id)}">选择合并</label></article>`;
 }
 function renderDetectionOverview(session){
   if(session.mode!=='batch'||!session.batchImageId||!session.candidates?.length)return'';
@@ -1525,6 +1604,8 @@ function bindEvents(){
   if($('#skinProfileFile'))$('#skinProfileFile').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)importSkinProfileFile(f);e.target.value='';});
   if($('#resetSkinProfileBtn'))$('#resetSkinProfileBtn').addEventListener('click',resetSkinProfile);
   if($('#openRecommendationExplorerBtn'))$('#openRecommendationExplorerBtn').addEventListener('click',()=>openRecommendationExplorer('all'));
+  if($('#openDuplicateWatchBtn'))$('#openDuplicateWatchBtn').addEventListener('click',()=>tab('duplicates'));
+  if($('#duplicateBackBtn'))$('#duplicateBackBtn').addEventListener('click',()=>tab('cabinet'));
   if($('#quickFindText'))$('#quickFindText').addEventListener('input',e=>{clearTimeout(quickFindInputTimer);quickFindInputTimer=setTimeout(()=>runQuickFindText(e.target.value),120);});
   if($('#quickFindPhotoInput'))$('#quickFindPhotoInput').addEventListener('change',async e=>{const f=e.target.files?.[0];if(f){try{await prepareQuickFindPhoto(f);}catch(err){console.error(err);toast('图片读取失败');}}e.target.value='';});
   if($('#quickFindClearBtn'))$('#quickFindClearBtn').addEventListener('click',clearQuickFind);
@@ -1553,6 +1634,7 @@ function bindEvents(){
     const reviewFilter=e.target.closest('[data-review-filter]');if(reviewFilter){const session=activeScan();if(session){session.reviewFilter=reviewFilter.dataset.reviewFilter;await saveScanSession(session);renderScanShelf();}return;}
     const candidateButton=e.target.closest('[data-candidate-action]');if(candidateButton){await candidateAction(candidateButton.dataset.candidateAction,candidateButton.dataset.id);return;}
     const recFilter=e.target.closest('[data-rec-filter]');if(recFilter){openRecommendationExplorer(recFilter.dataset.recFilter);return;}
+    const dupFilter=e.target.closest('[data-dup-filter]');if(dupFilter){duplicateWatchFilter=dupFilter.dataset.dupFilter||'high';renderDuplicateWatch();return;}
     const recProduct=e.target.closest('[data-rec-product]');if(recProduct){showProduct(recProduct.dataset.recProduct);return;}
     const qfConfirm=e.target.closest('[data-qf-confirm]');if(qfConfirm){quickFindState.selectedId=qfConfirm.dataset.qfConfirm;renderQuickFindResults();return;}
     const qfDetails=e.target.closest('[data-qf-details]');if(qfDetails){showProduct(qfDetails.dataset.qfDetails);return;}

@@ -1,4 +1,4 @@
-// V1.8.3 does not cache the app shell. This file only retires older Beauty Cabinet service workers.
+// V1.8.5 does not cache the app shell. This file only retires older Beauty Cabinet service workers.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {

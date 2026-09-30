@@ -12,20 +12,35 @@
   <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://*.workers.dev; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; media-src 'none';">
   <meta name="beauty-ai-endpoint" content="">
-  <link rel="manifest" href="manifest.webmanifest?v=1820">
-  <link rel="stylesheet" href="styles.css?v=1820">
-  <title>Beauty Cabinet V1.8.3 Relationships</title>
+  <link rel="manifest" href="manifest.webmanifest?v=1850">
+  <link rel="stylesheet" href="styles.css?v=1850">
+  <title>Beauty Cabinet V1.8.5 Duplicate Scan Integration</title>
 </head>
 <body>
 <div id="app">
 <header>
   <div>
     <div class="brand">Beauty Cabinet</div>
-    <div class="sub">V1.8.3 · Duplicate Groups + Relationships + Personal Match</div>
+    <div class="sub">V1.8.5 · Scan Similarity + Duplicate Watch + Personal Match</div>
   </div>
   <span class="status-badge">LOCAL</span>
 </header>
 <main>
+  <section id="duplicates" hidden>
+    <div class="card duplicate-watch-hero">
+      <div class="duplicate-watch-back"><button id="duplicateBackBtn" class="secondary" type="button">← 返回 Cabinet</button><span class="status-badge">LOCAL</span></div>
+      <div class="title"><div><h3>Duplicate Watch · 重复预警</h3><div class="note">这是 Cabinet 的库存健康检查，不再占用底部主标签。自动扫描整个 Cabinet，把高度相似的产品单列出来，并在购物前提醒你先查重。</div></div></div>
+      <div id="duplicateWatchStats" class="duplicate-watch-stats"></div>
+      <div class="duplicate-watch-filters" role="group" aria-label="Duplicate Watch filters">
+        <button class="active" type="button" data-dup-filter="high">高重复</button>
+        <button type="button" data-dup-filter="color">同色重复</button>
+        <button type="button" data-dup-filter="functional">功能重复</button>
+        <button type="button" data-dup-filter="all">全部</button>
+      </div>
+    </div>
+    <div id="duplicateWatchList"></div>
+  </section>
+
   <section id="home">
     <div class="hero">
       <h2>我的 Beauty Cabinet</h2>
@@ -69,6 +84,10 @@
     <div class="card">
       <div class="title"><h3>我的化妆柜</h3><button id="addBtn" type="button">＋ 添加</button></div>
       <div class="scan-box"><b>📷 双图产品档案</b><div class="note">每件产品可分别保存“我的实物图”和“官方/网上产品图”的本地副本；Cabinet 优先显示实物图缩略图。来源网址只作文字记录，App 不会自动访问或热链远程图片。</div></div>
+    </div>
+    <div class="card duplicate-watch-entry" id="duplicateWatchEntryCard">
+      <div class="title"><div><h3>Duplicate Watch · 库存查重</h3><div class="note">全局查看高重复、同色重复和功能重复。拍照/扫描单个产品时，相似物品会直接显示在扫描结果里。</div></div><button id="openDuplicateWatchBtn" class="secondary" type="button">查看全部</button></div>
+      <div id="duplicateWatchEntryStats" class="duplicate-watch-entry-stats"></div>
     </div>
     <div class="quick-find card" id="quickFindCard">
       <div class="title"><h3>Quick Find · 快速查找</h3><span class="status-badge">LOCAL</span></div>
@@ -141,7 +160,7 @@
         <div>Network</div><div>默认不上传；仅在当前扫描逐次确认后可访问同源安全代理</div>
         <div>AI Identification</div><div id="aiConfigStatus">OFF · secure proxy not configured</div>
         <div>Local Detection</div><div>本机压缩、候选区域、裁剪、颜色与配对建议</div>
-        <div>Version</div><div>V1.8.3</div>
+        <div>Version</div><div>V1.8.5</div>
       </div>
       <div class="card inset-card top-gap">
         <b>AI Recognition proxy（可选）</b>
@@ -170,6 +189,6 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="sheet"><div class="sheet-head"><div></div><button class="close" id="closeModalBtn" type="button" aria-label="关闭">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="app.js?v=1820" defer></script>
+<script src="app.js?v=1850" defer></script>
 </body>
 </html>
